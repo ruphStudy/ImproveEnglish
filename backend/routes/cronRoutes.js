@@ -7,10 +7,11 @@ const Log = require('../models/Log');
 
 /**
  * Manual Cron Trigger - For Testing
- * POST /api/cron/trigger-daily-lesson
+ * GET/POST /api/cron/trigger-daily-lesson
  * Manually runs the daily lesson logic (same as 7am cron)
+ * Supports both GET and POST for easy browser testing
  */
-router.post('/trigger-daily-lesson', async (req, res) => {
+const triggerDailyLesson = async (req, res) => {
   try {
     console.log('🔧 Manual cron trigger started...');
     
@@ -92,7 +93,11 @@ router.post('/trigger-daily-lesson', async (req, res) => {
     await Log.create({ type: 'ERROR', message: `Manual cron trigger error: ${err.message}` });
     res.status(500).json({ success: false, error: err.message });
   }
-});
+};
+
+// Support both GET and POST for easy testing
+router.get('/trigger-daily-lesson', triggerDailyLesson);
+router.post('/trigger-daily-lesson', triggerDailyLesson);
 
 /**
  * Manual Midnight Reset Trigger - For Testing
