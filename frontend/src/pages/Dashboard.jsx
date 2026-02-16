@@ -4,25 +4,35 @@ import { getUsers, getLogs, getRegistrationStats } from '../api';
 export default function Dashboard() {
   const [stats, setStats] = useState({ total: 0, byState: {}, lessonsToday: 0 });
   const [regStats, setRegStats] = useState({ total: 0, success: 0, duplicate: 0, error: 0, todayTotal: 0 });
+  const [error, setError] = useState(null);
 
   useEffect(() => {
     async function fetchStats() {
-      const usersRes = await getUsers();
-      const logsRes = await getLogs({ type: 'LESSON_GENERATED' });
-      const regStatsRes = await getRegistrationStats();
-      
-      const byState = {};
-      usersRes.data.forEach(u => {
-        byState[u.state] = (byState[u.state] || 0) + 1;
-      });
-      
-      setStats({
-        total: usersRes.data.length,
-        byState,
-        lessonsToday: logsRes.data.filter(l => new Date(l.createdAt).toDateString() === new Date().toDateString()).length
-      });
-      
-      setRegStats(regStatsRes.data);
+      try {
+        const usersRes = await getUsers();
+        const logsRes = await getLogs({ type: 'LESSON_GENERATED' });
+        const regStatsRes = await getRegistrationStats();
+        
+        // Safely handle array responses
+        const users = Array.isArray(usersRes.data) ? usersRes.data : [];
+        const logs = Array.isArray(logsRes.data) ? logsRes.data : [];
+        
+        const byState = {};
+        users.forEach(u => {
+          byState[u.state] = (byState[u.state] || 0) + 1;
+        });
+        
+        setStats({
+          total: users.length,
+          byState,
+          lessonsToday: logs.filter(l => new Date(l.createdAt).toDateString() === new Date().toDateString()).length
+        });
+        
+        setRegStats(regStatsRes.data || { total: 0, success: 0, duplicate: 0, error: 0, todayTotal: 0 });
+      } catch (err) {
+        console.error('Failed to fetch dashboard stats:', err);
+        setError(err.message || 'Failed to load dashboard data');
+      }
     }
     fetchStats();
   }, []);
@@ -30,6 +40,14 @@ export default function Dashboard() {
   return (
     <div>
       <h1 className="text-2xl font-bold mb-4">Dashboard</h1>
+      
+      {error && (
+        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
+          <p className="font-bold">Error</p>
+          <p>{error}</p>
+          <p className="text-sm mt-2">Please check if the backend API is running at: {import.meta.env.VITE_API_URL}</p>
+        </div>
+      )}
       
       <h2 className="text-xl font-semibold mb-3 mt-6">User Statistics</h2>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

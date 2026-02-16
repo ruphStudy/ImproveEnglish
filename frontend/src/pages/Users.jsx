@@ -8,6 +8,7 @@ export default function Users() {
   const [users, setUsers] = useState([]);
   const [filter, setFilter] = useState('');
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
     fetchUsers();
@@ -15,9 +16,18 @@ export default function Users() {
 
   async function fetchUsers() {
     setLoading(true);
-    const res = await getUsers(filter ? { state: filter } : {});
-    setUsers(res.data);
-    setLoading(false);
+    setError(null);
+    try {
+      const res = await getUsers(filter ? { state: filter } : {});
+      // Ensure data is an array
+      setUsers(Array.isArray(res.data) ? res.data : []);
+    } catch (err) {
+      console.error('Failed to fetch users:', err);
+      setError(err.message || 'Failed to load users');
+      setUsers([]); // Set empty array on error
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function handleStateChange(id, state) {
@@ -28,6 +38,15 @@ export default function Users() {
   return (
     <div>
       <h1 className="text-2xl font-bold mb-4">Users</h1>
+      
+      {error && (
+        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
+          <p className="font-bold">Error</p>
+          <p>{error}</p>
+          <p className="text-sm mt-2">Please check if the backend API is running and accessible.</p>
+        </div>
+      )}
+      
       <div className="mb-2">
         <label>Filter by state: </label>
         <select value={filter} onChange={e => setFilter(e.target.value)} className="border p-1 rounded">
@@ -49,6 +68,11 @@ export default function Users() {
           </thead>
           <tbody>
             {loading ? <tr><td colSpan={6} className="text-center">Loading...</td></tr> :
+              users.length === 0 ? (
+                <tr><td colSpan={6} className="text-center text-gray-500 py-4">
+                  {error ? 'Unable to load users' : 'No users found'}
+                </td></tr>
+              ) :
               users.map(u => (
                 <tr key={u._id}>
                   <td className="p-2">{u.name}</td>

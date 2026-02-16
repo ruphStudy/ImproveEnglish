@@ -8,17 +8,25 @@ export default function Logs() {
   const [logs, setLogs] = useState([]);
   const [type, setType] = useState('');
   const [date, setDate] = useState('');
+  const [error, setError] = useState(null);
 
   useEffect(() => {
     fetchLogs();
   }, [type, date]);
 
   async function fetchLogs() {
-    const params = {};
-    if (type) params.type = type;
-    if (date) params.startDate = date;
-    const res = await getLogs(params);
-    setLogs(res.data);
+    setError(null);
+    try {
+      const params = {};
+      if (type) params.type = type;
+      if (date) params.startDate = date;
+      const res = await getLogs(params);
+      setLogs(Array.isArray(res.data) ? res.data : []);
+    } catch (err) {
+      console.error('Failed to fetch logs:', err);
+      setError(err.message || 'Failed to load logs');
+      setLogs([]);
+    }
   }
 
   return (

@@ -10,6 +10,7 @@ export default function RegistrationLogs() {
   const [phone, setPhone] = useState('');
   const [date, setDate] = useState('');
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
     fetchLogs();
@@ -17,13 +18,21 @@ export default function RegistrationLogs() {
 
   async function fetchLogs() {
     setLoading(true);
-    const params = {};
-    if (status) params.status = status;
-    if (phone) params.phone = phone;
-    if (date) params.startDate = date;
-    const res = await getRegistrationLogs(params);
-    setLogs(res.data);
-    setLoading(false);
+    setError(null);
+    try {
+      const params = {};
+      if (status) params.status = status;
+      if (phone) params.phone = phone;
+      if (date) params.startDate = date;
+      const res = await getRegistrationLogs(params);
+      setLogs(Array.isArray(res.data) ? res.data : []);
+    } catch (err) {
+      console.error('Failed to fetch registration logs:', err);
+      setError(err.message || 'Failed to load registration logs');
+      setLogs([]);
+    } finally {
+      setLoading(false);
+    }
   }
 
   const getStatusColor = (status) => {
