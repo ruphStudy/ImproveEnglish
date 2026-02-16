@@ -1,7 +1,10 @@
 import axios from 'axios';
 
+// Use environment variable for API URL
+// Development: http://localhost:3000
+// Production: https://api.fluencyloop.in
 const api = axios.create({
-  baseURL: '/api',
+  baseURL: import.meta.env.VITE_API_URL + '/api',
 });
 
 export const getUsers = (params) => api.get('/users', { params });
