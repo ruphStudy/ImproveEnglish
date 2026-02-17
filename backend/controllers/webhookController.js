@@ -7,7 +7,7 @@ const dedupedMessages = new Set();
 // Meta webhook verification
 exports.verify = (req, res) => {
   console.log('🔍 Webhook Verification Request:', req.query);
-  const verify_token = process.env.VERIFY_TOKEN;
+  const verify_token = process.env.WHATSAPP_VERIFY_TOKEN;
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
