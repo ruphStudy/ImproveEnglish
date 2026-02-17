@@ -2,37 +2,28 @@ name: Deploy FluencyLoop
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
 
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v3
+      - name: Deploy on EC2 (local runner)
+        run: |
+          set -e
+          cd /home/ubuntu/ImproveEnglish
+          git pull origin main
 
-      - name: Deploy to EC2
-        uses: appleboy/ssh-action@v0.1.10
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USER }}
-          key: ${{ secrets.EC2_SSH_KEY }}
-          script: |
-            cd /home/ubuntu/ImproveEnglish
-            git pull origin main
+          # Backend
+          cd backend
+          npm ci --omit=dev || npm install --production
+          pm2 reload fluencyloop-api
 
-            # Backend
-            cd backend
-            npm install --production
-            pm2 reload fluencyloop-api
-
-            # Frontend
-            cd ../frontend
-            npm install
-            npm run build
-            sudo rsync -av --delete dist/ /var/www/html/
-
-            sudo systemctl reload nginx
+          # Frontend
+          cd ../frontend
+          npm ci || npm install
+          npm run build
+          sudo rsync -av --delete dist/ /var/www/html/
+          sudo systemctl reload nginx
 
