@@ -13,4 +13,11 @@ export const getLogs = (params) => api.get('/logs', { params });
 export const getRegistrationLogs = (params) => api.get('/registration-logs', { params });
 export const getRegistrationStats = () => api.get('/registration-stats');
 
+// Payment APIs
+export const createOrder = (data) => api.post('/payments/create-order', data);
+export const getOrderStatus = (orderId) => api.get(`/payments/order-status/${orderId}`);
+
+// Plan APIs
+export const getPlans = () => api.get('/plans');
+
 export default api;

@@ -24,7 +24,7 @@
   - OPENAI_API_KEY
   - WHATSAPP_TOKEN
   - WHATSAPP_PHONE_NUMBER_ID
-  - VERIFY_TOKEN
+  - WHATSAPP_VERIFY_TOKEN
   - MONGO_URI (currently using local: mongodb://localhost:27017/english-lesson-automation)
 
 ## 📝 Next Steps

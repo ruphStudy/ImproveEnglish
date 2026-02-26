@@ -10,6 +10,8 @@ const userRoutes = require('./routes/userRoutes');
 const webhookRoutes = require('./routes/webhookRoutes');
 const logRoutes = require('./routes/logRoutes');
 const registrationLogRoutes = require('./routes/registrationLogRoutes');
+const paymentRoutes = require('./routes/paymentRoutes');
+const planRoutes = require('./routes/planRoutes');
 
 const app = express();
 
@@ -18,8 +20,15 @@ app.set('trust proxy', 1);
 
 // Middleware
 app.use(helmet());
-app.use(cors());
+app.use(cors({
+  origin: ['http://localhost:5173', 'http://localhost:5174', 'https://www.fluencyloop.in'],
+  credentials: true
+}));
 app.use(morgan('dev'));
+
+// IMPORTANT: Razorpay webhook needs raw body, apply before express.json()
+app.use('/api/payments/razorpay-webhook', express.raw({ type: 'application/json' }));
+
 app.use(express.json());
 
 // Rate limit for registration endpoint
@@ -35,7 +44,10 @@ app.use('/api', userRoutes);
 app.use('/api', webhookRoutes);
 app.use('/api', logRoutes);
 app.use('/api', registrationLogRoutes);
+app.use('/api/payments', paymentRoutes);
+app.use('/api', planRoutes);
 app.use('/api/cron', require('./routes/cronRoutes'));
+app.use('/api/analytics', require('./routes/analyticsRoutes'));
 
 // Error handler
 app.use(errorHandler);
@@ -56,3 +68,8 @@ mongoose.connect(process.env.MONGO_URI, {
 // Cron jobs
 require('./cron/dailyLesson');
 require('./cron/resetState');
+require('./cron/subscriptionExpiry');
+require('./cron/expiryReminder');
+require('./cron/streakReset');
+require('./cron/weeklySummary');
+require('./cron/lessonReminder');

@@ -15,7 +15,23 @@ async function generateLesson(currentDay, name) {
 
 Your job is to create structured, practical, and attractive daily English lessons.
 
-Strict Rules:
+CRITICAL RULES:
+
+- NEVER repeat a topic used in previous days.
+
+- Always create a completely NEW topic.
+
+- Topic must be unique for each day.
+
+- Do not reuse similar themes like restaurant ordering if already used.
+
+- If Day number increases, topic complexity must increase gradually.
+
+- Avoid repeating situations (restaurant, hotel, shopping etc.) unless specifically told.
+
+
+
+Formatting Rules:
 - Always follow the exact format requested.
 - Never skip any section.
 - Keep total lesson under 350 words.
@@ -65,7 +81,7 @@ Important:
 If you cannot fit full lesson within 350 words, reduce dialogue length but do not remove any part.`;
 
   try {
-    const response = await openai.createChatCompletion({
+    const response = await openai.chat.completions.create({
       model: 'gpt-3.5-turbo',
       messages: [
         { role: 'system', content: systemPrompt },
@@ -76,7 +92,7 @@ If you cannot fit full lesson within 350 words, reduce dialogue length but do no
       top_p: 1               // Nucleus sampling (0-1)
     });
     
-    return response.data.choices[0].message.content.trim();
+    return response.choices[0].message.content.trim();
     
   } catch (error) {
     console.error('OpenAI API Error:', error.message);

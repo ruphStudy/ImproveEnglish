@@ -16,6 +16,48 @@ const userSchema = new mongoose.Schema({
   lessonCompleted: { type: Boolean, default: false }, // Tracks if today's lesson is completed
   lessonCompletedAt: { type: Date }, // When user replied DONE
   lastSeenAt: { type: Date },
+  expiryDate: { type: Date }, // Subscription expiry date
+  level: { 
+    type: String, 
+    enum: ['beginner', 'intermediate', 'advanced'],
+    default: 'beginner'
+  }, // User's English level
+  sevenDayReminderSent: {
+    type: Boolean,
+    default: false
+  }, // Expiry reminder sent 7 days before
+  threeDayReminderSent: {
+    type: Boolean,
+    default: false
+  }, // Expiry reminder sent 3 days before
+  streak: {
+    type: Number,
+    default: 0
+  }, // Consecutive lessons completed (lesson-based, not calendar-day based)
+  lastLessonCompletedDate: {
+    type: Date,
+    default: null
+  }, // Timestamp when user last completed a lesson
+  weeklyCompletedCount: {
+    type: Number,
+    default: 0
+  }, // Count of lessons completed this week (resets every Sunday)
+  lastFluencyScore: {
+    type: Number,
+    default: null
+  }, // Last voice evaluation fluency score (1-10)
+  noonReminderSent: {
+    type: Boolean,
+    default: false
+  }, // 12 PM lesson reminder sent today
+  eveningReminderSent: {
+    type: Boolean,
+    default: false
+  }, // 6 PM lesson reminder sent today
+  lastNotificationDate: {
+    type: Date,
+    default: null
+  }, // Date when lesson notification was sent (for 24-hour tracking)
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
 });

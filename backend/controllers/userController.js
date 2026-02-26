@@ -2,8 +2,18 @@ const User = require('../models/User');
 const Log = require('../models/Log');
 const RegistrationLog = require('../models/RegistrationLog');
 
-// Register user from Google Form
+/**
+ * DEPRECATED: Google Form registration
+ * 
+ * This endpoint is kept for backward compatibility only.
+ * NEW USERS should use the payment flow at /api/payments/create-order
+ * 
+ * Note: Legacy users created via this endpoint won't have:
+ * - expiryDate field (will be treated as lifetime access in cron)
+ * - level field (defaults to 'beginner')
+ */
 exports.register = async (req, res, next) => {
+  console.log('⚠️ DEPRECATED: Google Form registration used');
   console.log('Received registration request:', req.body);
   
   let { name, phone, email } = req.body;
@@ -137,6 +147,45 @@ exports.updateUser = async (req, res, next) => {
     const user = await User.findByIdAndUpdate(id, { state }, { new: true });
     if (!user) return res.status(404).json({ error: 'User not found' });
     res.json(user);
+  } catch (err) {
+    next(err);
+  }
+};
+
+// Get user by phone (including streak info)
+exports.getUserByPhone = async (req, res, next) => {
+  try {
+    let { phone } = req.params;
+    
+    // Normalize phone number
+    if (phone) {
+      phone = phone.replace(/\+/g, '');
+      if (!phone.startsWith('91')) {
+        phone = '91' + phone;
+      }
+    }
+    
+    const user = await User.findOne({ phone });
+    
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    // Return user with streak information
+    res.json({
+      name: user.name,
+      phone: user.phone,
+      email: user.email,
+      level: user.level,
+      currentDay: user.currentDay,
+      streak: user.streak,
+      lastLessonCompletedDate: user.lastLessonCompletedDate,
+      isActive: user.isActive,
+      state: user.state,
+      expiryDate: user.expiryDate,
+      lessonCompleted: user.lessonCompleted,
+      createdAt: user.createdAt
+    });
   } catch (err) {
     next(err);
   }
