@@ -40,6 +40,20 @@ const pendingOrderSchema = new mongoose.Schema({
     type: Number,
     required: true
   },
+  // Promo code fields (added for promo code feature)
+  promoCode: {
+    type: String,
+    default: null,
+    uppercase: true
+  },
+  originalAmountPaise: {
+    type: Number,
+    default: null // Original amount before discount
+  },
+  discountAmountPaise: {
+    type: Number,
+    default: 0 // Discount applied in paise
+  },
   status: {
     type: String,
     enum: ['created', 'paid', 'failed'],

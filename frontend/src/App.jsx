@@ -6,13 +6,19 @@ import Logs from './pages/Logs';
 import RegistrationLogs from './pages/RegistrationLogs';
 import BuyPlan from './pages/BuyPlan';
 import Analytics from './pages/Analytics';
+import PrivacyPolicy from './pages/PrivacyPolicy';
+import Terms from './pages/Terms';
+import Contact from './pages/Contact';
 
 export default function App() {
   return (
     <BrowserRouter>
       <Routes>
-        {/* Public route - no navigation */}
+        {/* Public routes - no admin navigation */}
         <Route path="/buy" element={<BuyPlan />} />
+        <Route path="/privacy-policy" element={<PrivacyPolicy />} />
+        <Route path="/terms" element={<Terms />} />
+        <Route path="/contact" element={<Contact />} />
         
         {/* Admin routes with navigation */}
         <Route path="/*" element={

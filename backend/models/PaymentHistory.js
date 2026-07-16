@@ -35,6 +35,20 @@ const paymentHistorySchema = new mongoose.Schema({
     type: Number,
     required: true
   },
+  // Promo code fields (added for promo code feature)
+  promoCode: {
+    type: String,
+    default: null,
+    uppercase: true
+  },
+  originalAmount: {
+    type: Number,
+    default: null // Original amount before discount
+  },
+  discountAmount: {
+    type: Number,
+    default: 0 // Discount applied
+  },
   currency: {
     type: String,
     default: 'INR'

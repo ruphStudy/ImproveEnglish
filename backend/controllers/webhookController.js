@@ -5,6 +5,7 @@ const CurriculumTopic = require('../models/CurriculumTopic');
 const TutorMemory = require('../models/TutorMemory');
 const { sendWhatsAppMessage, sendTemplateMessage } = require('../services/whatsappService');
 const { processVoiceEvaluation } = require('../services/voiceEvaluationService');
+const { validatePromoCode } = require('../services/promoService');
 const Razorpay = require('razorpay');
 const PendingOrder = require('../models/PendingOrder');
 const PlanMaster = require('../models/PlanMaster');
@@ -357,9 +358,8 @@ exports.handleWebhook = async (req, res, next) => {
         });
         
         // Send main streak confirmation message
-        await sendWhatsAppMessage(
-          phone,
-          `🔥 Great job ${user.name}!\n\nYour current streak is ${user.streak} day${user.streak > 1 ? 's' : ''}.\n\nComplete tomorrow's lesson to keep it growing!`
+        // (Removed duplicate plain message, now only template is sent)
+          'en'
         );
         
         // Check for milestone celebrations (only if streak was actually incremented)
@@ -367,9 +367,11 @@ exports.handleWebhook = async (req, res, next) => {
           const milestoneDays = [3, 7, 14, 30];
           
           if (milestoneDays.includes(user.streak)) {
-            await sendWhatsAppMessage(
+            await sendTemplateMessage(
               phone,
-              `🎉 Amazing ${user.name}!\n\nYou have reached a ${user.streak}-day streak!\n\nYou are building a powerful English habit. Keep going! 🚀`
+              'streak_reminder',
+              [user.name, user.streak.toString()],
+              'en'
             );
             
             await Log.create({
@@ -453,7 +455,8 @@ exports.handleWebhook = async (req, res, next) => {
         upgradeMessage += `📝 *How to reply:*\n`;
         upgradeMessage += `• Just days (e.g., *90*) - keeps ${user.level}\n`;
         upgradeMessage += `• Code + days (e.g., *B 90* or *I 30*)\n`;
-        upgradeMessage += `• Full name + days (e.g., *beginner 90*)\n\n`;
+        upgradeMessage += `• Full name + days (e.g., *beginner 90*)\n`;
+        upgradeMessage += `• With promo: *90 PROMO50* or *B 90 SAVE20*\n\n`;
         upgradeMessage += `⚠️ *Note:* Changing level resets to Day 1\n`;
         upgradeMessage += `🔥 Your ${user.streak}-day streak will be preserved!`;
         
@@ -468,24 +471,28 @@ exports.handleWebhook = async (req, res, next) => {
         
         console.log(`✅ Upgrade options sent to ${user.name}`);
       }
-      // Handle plan selection: Can be "30", "90", "365" OR "beginner 90", "B90", "I 30", etc.
-      else if (text.match(/^(beginner|intermediate|advanced|b|i|a)?\s*(30|90|365)$/i) || ['30', '90', '365'].includes(text)) {
+      // Handle plan selection: Can be "30", "90", "365" OR "beginner 90", "B90", "I 30" OR "90 PROMO50", "B 90 SAVE20", etc.
+      else if (text.match(/^(beginner|intermediate|advanced|b|i|a)?\s*(30|90|365)(\s+[A-Za-z0-9]+)?$/i) || ['30', '90', '365'].includes(text)) {
         console.log(`📅 User ${phone} selected plan: ${text}`);
         
         // Parse input
         let selectedLevel = user.level; // Default to current level
         let planDuration;
+        let promoCode = null;
         
-        // Check if level is specified
-        const match = text.match(/^(beginner|intermediate|advanced|b|i|a)\s*(30|90|365)$/i);
+        // Check if level and/or promo code is specified
+        const match = text.match(/^(beginner|intermediate|advanced|b|i|a)?\s*(30|90|365)(\s+([A-Za-z0-9]+))?$/i);
         if (match) {
-          const levelInput = match[1].toLowerCase();
+          const levelInput = match[1] ? match[1].toLowerCase() : null;
           planDuration = parseInt(match[2]);
+          promoCode = match[4] ? match[4].toUpperCase().trim() : null;
           
           // Map short codes and full names
-          if (levelInput === 'b' || levelInput === 'beginner') selectedLevel = 'beginner';
-          else if (levelInput === 'i' || levelInput === 'intermediate') selectedLevel = 'intermediate';
-          else if (levelInput === 'a' || levelInput === 'advanced') selectedLevel = 'advanced';
+          if (levelInput) {
+            if (levelInput === 'b' || levelInput === 'beginner') selectedLevel = 'beginner';
+            else if (levelInput === 'i' || levelInput === 'intermediate') selectedLevel = 'intermediate';
+            else if (levelInput === 'a' || levelInput === 'advanced') selectedLevel = 'advanced';
+          }
         } else {
           // Just duration, keep current level
           planDuration = parseInt(text);
@@ -516,7 +523,55 @@ exports.handleWebhook = async (req, res, next) => {
         
         console.log(`✅ Plan found: ${selectedLevel} - ${planDuration} days - ₹${plan.price}`);
         
-        const amountPaise = plan.price * 100;
+        let originalAmountPaise = plan.price * 100;
+        let finalAmountPaise = originalAmountPaise;
+        let discountAmountPaise = 0;
+        let promoValidation = null;
+        
+        // Validate and apply promo code if provided
+        if (promoCode) {
+          console.log(`🎟️  Validating promo code: ${promoCode}`);
+          
+          promoValidation = await validatePromoCode(
+            promoCode,
+            user._id.toString(),
+            plan.price,
+            selectedLevel,
+            planDuration,
+            phone
+          );
+          
+          if (promoValidation.valid) {
+            discountAmountPaise = promoValidation.discountAmount * 100;
+            finalAmountPaise = promoValidation.finalAmount * 100;
+            
+            console.log(`✅ Promo code valid:`);
+            console.log(`   Original: ₹${plan.price}`);
+            console.log(`   Discount: ₹${promoValidation.discountAmount}`);
+            console.log(`   Final: ₹${promoValidation.finalAmount}`);
+            
+            // Send confirmation message about discount
+            await sendWhatsAppMessage(
+              phone,
+              `🎉 Great! Promo code *${promoCode}* applied!\n\n` +
+              `Original: ₹${plan.price}\n` +
+              `Discount: -₹${promoValidation.discountAmount}\n` +
+              `*Final Amount: ₹${promoValidation.finalAmount}*\n\n` +
+              `Proceeding with payment link...`
+            );
+          } else {
+            console.log(`❌ Invalid promo code: ${promoValidation.message}`);
+           
+            await sendWhatsAppMessage(
+              phone,
+              `❌ Promo code *${promoCode}* is invalid:\n${promoValidation.message}\n\n` +
+              `Proceeding without discount at ₹${plan.price}`
+            );
+            
+            // Reset promo code so we don't store invalid code
+            promoCode = null;
+          }
+        }
         
         // Check if level will change (for messaging purposes)
         const levelWillChange = selectedLevel !== user.level;
@@ -524,10 +579,14 @@ exports.handleWebhook = async (req, res, next) => {
         
         try {
           // Create Razorpay Payment Link (works for WhatsApp sharing)
+          const description = promoCode 
+            ? `English Course Upgrade - ${selectedLevel} - ${planDuration} Days (${promoCode} applied)`
+            : `English Course Upgrade - ${selectedLevel} - ${planDuration} Days`;
+          
           const paymentLinkResponse = await razorpay.paymentLink.create({
-            amount: amountPaise,
+            amount: finalAmountPaise,
             currency: 'INR',
-            description: `English Course Upgrade - ${selectedLevel} - ${planDuration} Days`,
+            description: description,
             customer: {
               name: user.name,
               contact: phone,
@@ -561,7 +620,10 @@ exports.handleWebhook = async (req, res, next) => {
             email: user.email || '',
             level: selectedLevel,
             planDuration: planDuration,
-            amountPaise: amountPaise,
+            amountPaise: finalAmountPaise,
+            originalAmountPaise: promoCode ? originalAmountPaise : null,
+            discountAmountPaise: promoCode ? discountAmountPaise : 0,
+            promoCode: promoCode || null,
             status: 'created',
             type: 'upgrade',
             userId: user._id
@@ -574,20 +636,36 @@ exports.handleWebhook = async (req, res, next) => {
           const levelDisplay = selectedLevel.charAt(0).toUpperCase() + selectedLevel.slice(1);
           const levelCode = selectedLevel === 'beginner' ? 'B' : selectedLevel === 'intermediate' ? 'I' : 'A';
           
+          // Build amount display with promo if applied
+          let amountDisplay = '';
+          if (promoCode && promoValidation && promoValidation.valid) {
+            const finalAmount = finalAmountPaise / 100;
+            const originalAmount = originalAmountPaise / 100;
+            const discount = discountAmountPaise / 100;
+            amountDisplay = `💰 Amount:\n   Original: ₹${originalAmount}\n   Discount: -₹${discount}\n   *Final: ₹${finalAmount}*`;
+          } else {
+            amountDisplay = `💰 Amount: ₹${plan.price}`;
+          }
+          
           const confirmMessage = levelWillChange
-            ? `💳 *Your upgrade order is ready!*\n\n📚 Level: ${levelDisplay} (${levelCode})\n📅 Duration: ${planDuration} Days\n💰 Amount: ₹${plan.price}\n\n🔗 Pay here: ${paymentLink}\n\n✨ After payment:\n• Subscription extended\n• Level updated to ${levelDisplay}\n• Progress resets to Day 1`
-            : `💳 *Your upgrade order is ready!*\n\n📚 Level: ${levelDisplay} (${levelCode})\n📅 Duration: ${planDuration} Days\n💰 Amount: ₹${plan.price}\n\n🔗 Pay here: ${paymentLink}\n\n✨ Your subscription will be extended after payment.`;
+            ? `💳 *Your upgrade order is ready!*\n\n📚 Level: ${levelDisplay} (${levelCode})\n📅 Duration: ${planDuration} Days\n${amountDisplay}\n\n🔗 Pay here: ${paymentLink}\n\n✨ After payment:\n• Subscription extended\n• Level updated to ${levelDisplay}\n• Progress resets to Day 1`
+            : `💳 *Your upgrade order is ready!*\n\n📚 Level: ${levelDisplay} (${levelCode})\n📅 Duration: ${planDuration} Days\n${amountDisplay}\n\n🔗 Pay here: ${paymentLink}\n\n✨ Your subscription will be extended after payment.`;
           
           await sendWhatsAppMessage(phone, confirmMessage);
           
           await Log.create({
             type: 'UPGRADE_ORDER_CREATED',
             userPhone: phone,
-            message: `Upgrade payment link created for ${selectedLevel} - ${planDuration} days - ₹${plan.price}`,
+            message: promoCode 
+              ? `Upgrade payment link created for ${selectedLevel} - ${planDuration} days - ₹${finalAmountPaise/100} (Promo: ${promoCode})`
+              : `Upgrade payment link created for ${selectedLevel} - ${planDuration} days - ₹${plan.price}`,
             status: 'SUCCESS',
             metadata: {
               paymentLinkId: paymentLinkResponse.id,
-              amount: amountPaise,
+              amount: finalAmountPaise,
+              originalAmount: promoCode ? originalAmountPaise : null,
+              discountAmount: promoCode ? discountAmountPaise : 0,
+              promoCode: promoCode || null,
               planDuration,
               level: selectedLevel,
               levelWillChange: levelWillChange,

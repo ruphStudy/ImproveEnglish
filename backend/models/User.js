@@ -67,4 +67,17 @@ userSchema.pre('save', function(next) {
   next();
 });
 
+// Database indexes for performance optimization
+// Compound index for daily lesson cron query (most important)
+userSchema.index({ isActive: 1, state: 1, expiryDate: 1 });
+
+// Index for reminder cron queries
+userSchema.index({ isActive: 1, state: 1, lastNotificationDate: 1 });
+
+// Index for expiry reminder queries
+userSchema.index({ isActive: 1, expiryDate: 1 });
+
+// Index for phone (already unique, but explicit for lookups)
+userSchema.index({ phone: 1 });
+
 module.exports = mongoose.model('User', userSchema);

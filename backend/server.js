@@ -12,6 +12,7 @@ const logRoutes = require('./routes/logRoutes');
 const registrationLogRoutes = require('./routes/registrationLogRoutes');
 const paymentRoutes = require('./routes/paymentRoutes');
 const planRoutes = require('./routes/planRoutes');
+const promoRoutes = require('./routes/promoRoutes');
 
 const app = express();
 
@@ -46,6 +47,7 @@ app.use('/api', logRoutes);
 app.use('/api', registrationLogRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api', planRoutes);
+app.use('/api/promo', promoRoutes);
 app.use('/api/cron', require('./routes/cronRoutes'));
 app.use('/api/analytics', require('./routes/analyticsRoutes'));
 
@@ -58,7 +60,14 @@ mongoose.connect(process.env.MONGO_URI, {
   useUnifiedTopology: true
 }).then(() => {
   console.log('MongoDB connected');
-  // Start server only after DB connection
+  
+  // Start lesson worker for background job processing
+  const { startLessonWorker } = require('./workers/lessonWorker');
+  const concurrency = parseInt(process.env.LESSON_WORKER_CONCURRENCY) || 15;
+  startLessonWorker(concurrency);
+  console.log(`🚀 Lesson worker started with concurrency: ${concurrency}`);
+  
+  // Start server only after DB connection and worker setup
   const PORT = process.env.PORT || 3000;
   app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 }).catch(err => {

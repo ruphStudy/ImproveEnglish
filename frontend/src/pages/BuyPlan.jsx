@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { createOrder, getOrderStatus, getPlans } from '../api';
+import Footer from '../components/Footer';
 
 export default function BuyPlan() {
   const [searchParams] = useSearchParams();
@@ -242,8 +243,9 @@ export default function BuyPlan() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 py-12 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-4xl mx-auto">
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex flex-col">
+      <div className="flex-grow py-12 px-4 sm:px-6 lg:px-8">
+        <div className="max-w-4xl mx-auto">
         {/* Header */}
         <div className="text-center mb-8">
           <h1 className="text-4xl font-bold text-gray-900 mb-2">
@@ -458,6 +460,9 @@ export default function BuyPlan() {
             ⭐ Trusted by 1000+ learners | 💬 24/7 WhatsApp Support | 🏆 Results Guaranteed
           </p>
         </div>
+      </div>
+      
+      <Footer /iv>
       </div>
     </div>
   );

@@ -10,16 +10,19 @@ const Log = require('../models/Log');
 const { runExpiryReminderJob } = require('../cron/expiryReminder');
 const { runStreakResetJob } = require('../cron/streakReset');
 const { runWeeklySummaryJob } = require('../cron/weeklySummary');
+const { lessonQueue } = require('../config/queueConfig');
 
 /**
- * Manual Cron Trigger - For Testing
+ * Manual Cron Trigger - For Testing (V3 - Queue-Based)
  * GET/POST /api/cron/trigger-daily-lesson
  * Manually runs the daily lesson logic (same as 7am cron)
+ * Enqueues all eligible users to Bull Queue for parallel processing
  * Supports both GET and POST for easy browser testing
  */
 const triggerDailyLesson = async (req, res) => {
   try {
-    console.log('🔧 Manual cron trigger V2 started...');
+    console.log('🔧 Manual cron trigger V3 started (Queue-based)...');
+    const startTime = Date.now();
     
     // Find active users who are READY
     const users = await User.find({ 
@@ -29,142 +32,63 @@ const triggerDailyLesson = async (req, res) => {
         { expiryDate: { $gte: new Date() } },
         { expiryDate: null }
       ]
-    });
+    }).lean().select('_id name phone level currentDay');
     
-    console.log(`📋 Found ${users.length} active users to send lessons to`);
+    const userCount = users.length;
+    console.log(`📋 Found ${userCount} active users to enqueue`);
     
-    const results = [];
-    
-    for (const user of users) {
-      try {
-        // Fetch curriculum topic
-        const topic = await CurriculumTopic.findOne({
-          level: user.level,
-          day: user.currentDay,
-          isActive: true
-        });
-
-        if (!topic) {
-          console.error(`❌ No curriculum topic for ${user.name} - Level: ${user.level}, Day: ${user.currentDay}`);
-          results.push({
-            success: false,
-            user: user.name,
-            phone: user.phone,
-            day: user.currentDay,
-            error: 'No curriculum topic found'
-          });
-          continue;
-        }
-
-        // Fetch or create TutorMemory
-        let tutorMemory = await TutorMemory.findOne({ userId: user._id });
-        if (!tutorMemory) {
-          tutorMemory = await TutorMemory.create({
-            userId: user._id,
-            recentTopicDays: [],
-            recentGrammarKeys: [],
-            vocabBank: [],
-            weakAreas: [],
-            difficultyScore: 0.5
-          });
-        }
-
-        // Generate structured lesson with AI V2
-        console.log(`🎓 Generating lesson for ${user.name} - Day ${user.currentDay}: ${topic.title}`);
-        const lessonData = await generateLesson(user, topic, tutorMemory);
-
-        // Save lesson to Lessons collection
-        const lesson = await Lesson.create({
-          userId: user._id,
-          day: user.currentDay,
-          level: user.level,
-          topicTitle: topic.title,
-          grammarFocus: topic.grammarFocus,
-          scenarioType: lessonData.scenarioType,
-          lessonJson: lessonData.lessonJson,
-          lessonText: lessonData.lessonText,
-          status: 'generated',
-          generatedAt: new Date()
-        });
-
-        // Update TutorMemory
-        tutorMemory.recentTopicDays.push(user.currentDay);
-        if (tutorMemory.recentTopicDays.length > 7) {
-          tutorMemory.recentTopicDays = tutorMemory.recentTopicDays.slice(-7);
-        }
-        if (topic.grammarFocus && !tutorMemory.recentGrammarKeys.includes(topic.grammarFocus)) {
-          tutorMemory.recentGrammarKeys.push(topic.grammarFocus);
-          if (tutorMemory.recentGrammarKeys.length > 7) {
-            tutorMemory.recentGrammarKeys = tutorMemory.recentGrammarKeys.slice(-7);
-          }
-        }
-        if (lessonData.vocabList && lessonData.vocabList.length > 0) {
-          lessonData.vocabList.forEach(vocab => {
-            tutorMemory.vocabBank.push({
-              word: vocab.word,
-              day: user.currentDay,
-              addedAt: new Date()
-            });
-          });
-        }
-        await tutorMemory.save();
-
-        // Update user state
-        user.state = 'WAITING_START';
-        user.lessonDate = new Date();
-        user.lessonCompleted = false;
-        await user.save();
-        
-        // Send WhatsApp TEMPLATE message
-        // Parameters: {{1}}=name, {{2}}=day, {{3}}=instruction text
-        await sendTemplateMessage(
-          user.phone, 
-          'daily_lesson_notification', 
-          [
-            user.name, 
-            user.currentDay.toString(),
-            'Reply START to receive today\'s lesson.'
-          ],
-          'en' // Use 'en' if template was created with English language, or 'en_US' for English (US)
-        );
-        
-        await Log.create({ 
-          type: 'LESSON_GENERATED', 
-          phone: user.phone, 
-          message: `[MANUAL] Template sent for day ${user.currentDay}` 
-        });
-        
-        console.log(`✅ Lesson sent to ${user.name} (${user.phone}) - Day ${user.currentDay}`);
-        
-        results.push({
-          success: true,
-          user: user.name,
-          phone: user.phone,
-          day: user.currentDay
-        });
-      } catch (err) {
-        console.error(`❌ Error for ${user.name}:`, err.message);
-        results.push({
-          success: false,
-          user: user.name,
-          phone: user.phone,
-          error: err.message
-        });
-      }
+    if (userCount === 0) {
+      await Log.create({
+        type: 'CRON_LESSON',
+        message: '[MANUAL] No users to process'
+      });
+      
+      return res.json({
+        success: true,
+        message: 'No users to process',
+        totalUsers: 0,
+        jobsEnqueued: 0
+      });
     }
+    
+    // Enqueue all users to Bull Queue
+    const jobPromises = users.map(user => 
+      lessonQueue.add(
+        { userId: user._id.toString() },
+        { 
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 5000 },
+          removeOnComplete: 100,
+          removeOnFail: 200
+        }
+      )
+    );
+    
+    await Promise.all(jobPromises);
+    
+    const enqueueTime = Date.now() - startTime;
+    
+    // Calculate estimated completion time
+    const concurrency = parseInt(process.env.LESSON_WORKER_CONCURRENCY) || 15;
+    const avgProcessingTime = 21; // seconds per lesson
+    const estimatedMinutes = Math.ceil((userCount / concurrency) * avgProcessingTime / 60);
     
     await Log.create({
       type: 'CRON_LESSON',
-      message: `[MANUAL] Daily lesson trigger: ${users.length} users processed`
+      message: `[MANUAL] Daily lesson trigger: ${userCount} users enqueued in ${enqueueTime}ms`
     });
     
-    console.log('🎉 Manual cron trigger completed!');
+    console.log(`🎉 Manual cron trigger completed! ${userCount} jobs enqueued in ${enqueueTime}ms`);
+    console.log(`⏱️  Estimated completion: ~${estimatedMinutes} minutes with ${concurrency} parallel workers`);
     
     res.json({
       success: true,
-      message: 'Daily lesson cron triggered successfully',
-      totalUsers: users.length,
-      results: results
+      message: 'Daily lesson jobs enqueued successfully',
+      totalUsers: userCount,
+      jobsEnqueued: userCount,
+      enqueueTime: `${enqueueTime}ms`,
+      estimatedCompletion: `~${estimatedMinutes} minutes`,
+      parallelWorkers: concurrency
     });
     
   } catch (err) {
@@ -391,6 +315,129 @@ router.post('/set-notification-date', async (req, res) => {
     
   } catch (err) {
     console.error('❌ Set notification date error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * Queue Monitoring - Get Queue Stats
+ * GET /api/cron/queue/stats
+ * Returns real-time statistics about the lesson generation queue
+ */
+router.get('/queue/stats', async (req, res) => {
+  try {
+    const [waitingCount, activeCount, completedCount, failedCount, delayedCount] = await Promise.all([
+      lessonQueue.getWaitingCount(),
+      lessonQueue.getActiveCount(),
+      lessonQueue.getCompletedCount(),
+      lessonQueue.getFailedCount(),
+      lessonQueue.getDelayedCount()
+    ]);
+
+    res.json({
+      success: true,
+      queue: 'lessonQueue',
+      stats: {
+        waiting: waitingCount,
+        active: activeCount,
+        completed: completedCount,
+        failed: failedCount,
+        delayed: delayedCount,
+        total: waitingCount + activeCount + delayedCount
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('❌ Queue stats error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * Queue Monitoring - Get Recent Jobs
+ * GET /api/cron/queue/jobs?status=completed&limit=10
+ * Returns recent jobs with their status
+ * Query params:
+ *   - status: completed, failed, waiting, active, delayed (default: all)
+ *   - limit: number of jobs to return (default: 20, max: 100)
+ */
+router.get('/queue/jobs', async (req, res) => {
+  try {
+    const status = req.query.status || 'completed';
+    const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+
+    let jobs = [];
+    
+    switch (status) {
+      case 'completed':
+        jobs = await lessonQueue.getCompleted(0, limit - 1);
+        break;
+      case 'failed':
+        jobs = await lessonQueue.getFailed(0, limit - 1);
+        break;
+      case 'waiting':
+        jobs = await lessonQueue.getWaiting(0, limit - 1);
+        break;
+      case 'active':
+        jobs = await lessonQueue.getActive(0, limit - 1);
+        break;
+      case 'delayed':
+        jobs = await lessonQueue.getDelayed(0, limit - 1);
+        break;
+      default:
+        return res.status(400).json({ 
+          success: false, 
+          error: 'Invalid status. Use: completed, failed, waiting, active, or delayed' 
+        });
+    }
+
+    const jobDetails = jobs.map(job => ({
+      id: job.id,
+      userId: job.data.userId,
+      status: job.returnvalue ? 'completed' : (job.failedReason ? 'failed' : status),
+      attemptsMade: job.attemptsMade,
+      processedOn: job.processedOn ? new Date(job.processedOn).toISOString() : null,
+      finishedOn: job.finishedOn ? new Date(job.finishedOn).toISOString() : null,
+      failedReason: job.failedReason || null,
+      result: job.returnvalue || null
+    }));
+
+    res.json({
+      success: true,
+      queue: 'lessonQueue',
+      status: status,
+      count: jobDetails.length,
+      jobs: jobDetails,
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('❌ Queue jobs error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * Queue Monitoring - Clean Queue
+ * POST /api/cron/queue/clean
+ * Removes old completed and failed jobs from the queue
+ * Body params:
+ *   - grace: milliseconds to keep jobs (default: 3600000 = 1 hour)
+ */
+router.post('/queue/clean', async (req, res) => {
+  try {
+    const grace = parseInt(req.body.grace) || 3600000; // 1 hour default
+    
+    await lessonQueue.clean(grace, 'completed');
+    await lessonQueue.clean(grace, 'failed');
+    
+    res.json({
+      success: true,
+      message: `Cleaned completed and failed jobs older than ${grace}ms`,
+      gracePeriod: `${grace / 60000} minutes`,
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('❌ Queue clean error:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
