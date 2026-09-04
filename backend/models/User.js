@@ -45,7 +45,7 @@ const userSchema = new mongoose.Schema({
   lastFluencyScore: {
     type: Number,
     default: null
-  }, // Last voice evaluation fluency score (1-10)
+  }, // Last voice evaluation overall score (1-10) - see SpeakingAttempt for full per-dimension history
   noonReminderSent: {
     type: Boolean,
     default: false

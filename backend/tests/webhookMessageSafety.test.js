@@ -108,3 +108,40 @@ describe('handleWebhook - unsupported/non-text message types do not crash', () =
     expect(Log.create).toHaveBeenCalledWith(expect.objectContaining({ type: 'WEBHOOK_MESSAGE_ERROR' }));
   });
 });
+
+describe('handleWebhook - audio message sets lastFluencyScore from the truthful overall score', () => {
+  const { processVoiceEvaluation } = require('../services/voiceEvaluationService');
+  const { sendWhatsAppMessage, sendTemplateMessage } = require('../services/whatsappService');
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  test('lastFluencyScore is set from result.overallScore, and the old pronunciation template is never used', async () => {
+    const save = jest.fn().mockResolvedValue(true);
+    const audioUser = { ...existingUser, save };
+    User.findOne.mockResolvedValue(audioUser);
+    processVoiceEvaluation.mockResolvedValue({
+      success: true,
+      overallScore: 8,
+      messageText: '🎤 Speaking Feedback\n\nOverall: 8/10'
+    });
+
+    const req = webhookReqWithMessage({ id: 'wamid.audio1', from: existingUser.phone, type: 'audio', audio: { id: 'media1' } });
+    const res = mockRes();
+    const next = jest.fn();
+
+    await webhookController.handleWebhook(req, res, next);
+
+    expect(audioUser.lastFluencyScore).toBe(8);
+    expect(save).toHaveBeenCalled();
+    expect(sendWhatsAppMessage).toHaveBeenCalledWith(existingUser.phone, expect.stringContaining('8/10'));
+    expect(sendTemplateMessage).not.toHaveBeenCalledWith(
+      expect.anything(),
+      'voice_evaluation_result_new',
+      expect.anything(),
+      expect.anything()
+    );
+    expect(res.sendStatus).toHaveBeenCalledWith(200);
+  });
+});

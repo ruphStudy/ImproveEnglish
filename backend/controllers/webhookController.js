@@ -90,31 +90,27 @@ exports.handleWebhook = async (req, res, next) => {
             phone,
             `🎤 Processing your voice message...\n\nPlease wait while I evaluate your English.`
           );
-          
-          // Process voice evaluation
+
+          // Process voice evaluation - links to the current lesson's speaking
+          // prompt when available, evaluates only what a transcript can show
+          // (grammar/sentence formation/naturalness/vocabulary/relevance),
+          // and returns an already-formatted concise WhatsApp message.
           const mediaId = msg.audio.id;
-          const evaluation = await processVoiceEvaluation(mediaId, phone);
-          
-          // Update user's last fluency score
-          user.lastFluencyScore = evaluation.fluencyScore;
+          const result = await processVoiceEvaluation(mediaId, user);
+
+          // Update user's last score (kept for dashboard/legacy compatibility,
+          // now sourced from the truthful overall score rather than a
+          // fabricated pronunciation/fluency claim)
+          user.lastFluencyScore = result.overallScore;
           await user.save();
-          
-          // Send evaluation results using template
-          await sendTemplateMessage(
-            phone,
-            'voice_evaluation_result_new',
-            [
-              user.name,
-              evaluation.fluencyScore.toString(),
-              evaluation.grammarScore.toString(),
-              evaluation.pronunciationFeedback,
-              evaluation.correctedVersion
-            ],
-            'en_US'
-          );
-          
-          console.log(`✅ Voice evaluation sent to ${phone}. Fluency: ${evaluation.fluencyScore}/10`);
-          
+
+          // Plain text (not the old pronunciation-labeled template) - we're
+          // inside the active conversation window and control the wording
+          // directly, avoiding any pronunciation-accuracy overclaim.
+          await sendWhatsAppMessage(phone, result.messageText);
+
+          console.log(`✅ Voice evaluation sent to ${phone}. Overall: ${result.overallScore}/10`);
+
         } catch (error) {
           console.error(`❌ Error processing voice message:`, error);
           
