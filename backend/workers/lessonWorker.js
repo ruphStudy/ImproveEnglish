@@ -99,6 +99,7 @@ async function processLessonJob(userId) {
           recentTopicDays: [],
           recentGrammarKeys: [],
           vocabBank: [],
+          recentScenarioTypes: [],
           weakAreas: [],
           difficultyScore: 0.5
         });
@@ -119,6 +120,8 @@ async function processLessonJob(userId) {
         scenarioType: lessonData.scenarioType,
         lessonJson: lessonData.lessonJson,
         lessonText: lessonData.lessonText,
+        generationVersion: lessonData.generationVersion,
+        validationStatus: lessonData.validationStatus,
         status: 'generated',
         generatedAt: new Date()
       });
@@ -147,6 +150,13 @@ async function processLessonJob(userId) {
             addedAt: new Date()
           });
         });
+      }
+
+      if (lessonData.scenarioType) {
+        tutorMemory.recentScenarioTypes.push(lessonData.scenarioType);
+        if (tutorMemory.recentScenarioTypes.length > 5) {
+          tutorMemory.recentScenarioTypes = tutorMemory.recentScenarioTypes.slice(-5);
+        }
       }
 
       await tutorMemory.save();

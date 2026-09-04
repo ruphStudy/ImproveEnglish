@@ -19,7 +19,11 @@ const tutorMemorySchema = new mongoose.Schema({
     word: String,
     day: Number,
     addedAt: { type: Date, default: Date.now }
-  }], // All vocabulary words introduced (for anti-repetition)
+  }], // Recent vocabulary words introduced (for anti-repetition) - bounded, see pre('save')
+  recentScenarioTypes: {
+    type: [String],
+    default: []
+  }, // Last 5 scenario types used (for variety within the deterministic rotation)
   weakAreas: {
     type: [String],
     default: []
@@ -34,20 +38,32 @@ const tutorMemorySchema = new mongoose.Schema({
   updatedAt: { type: Date, default: Date.now }
 });
 
+const BOUNDS = {
+  recentTopicDays: 7,
+  recentGrammarKeys: 7,
+  recentScenarioTypes: 5,
+  // vocabBank previously had no bound and grew indefinitely. 50 is comfortably
+  // more than the ~12 most-recent words the generator reads for anti-repetition.
+  vocabBank: 50
+};
+
+// Pure, DB-independent so it's directly unit-testable without a live Mongo connection.
+function capBoundedArrays(doc) {
+  Object.entries(BOUNDS).forEach(([field, max]) => {
+    if (doc[field] && doc[field].length > max) {
+      doc[field] = doc[field].slice(-max);
+    }
+  });
+  return doc;
+}
+
 tutorMemorySchema.pre('save', function(next) {
   this.updatedAt = Date.now();
-  
-  // Cap recentTopicDays at 7
-  if (this.recentTopicDays.length > 7) {
-    this.recentTopicDays = this.recentTopicDays.slice(-7);
-  }
-  
-  // Cap recentGrammarKeys at 7
-  if (this.recentGrammarKeys.length > 7) {
-    this.recentGrammarKeys = this.recentGrammarKeys.slice(-7);
-  }
-  
+  capBoundedArrays(this);
   next();
 });
 
-module.exports = mongoose.model('TutorMemory', tutorMemorySchema);
+const TutorMemory = mongoose.model('TutorMemory', tutorMemorySchema);
+module.exports = TutorMemory;
+module.exports.capBoundedArrays = capBoundedArrays;
+module.exports.BOUNDS = BOUNDS;

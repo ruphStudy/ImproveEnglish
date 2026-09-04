@@ -32,15 +32,24 @@ const lessonSchema = new mongoose.Schema({
     microPractice: {
       q1: String,
       q2: String,
-      q3: String,
-      expectedStructure: String
+      q3: String, // legacy field, unused by v3 generator - kept for old lesson compatibility
+      expectedStructure: String // legacy field, unused by v3 generator - kept for old lesson compatibility
     },
     confidenceLine: String
   }, // Full structured JSON from AI
-  lessonText: { 
-    type: String, 
-    required: true 
+  lessonText: {
+    type: String,
+    required: true
   }, // Formatted text for WhatsApp
+  generationVersion: {
+    type: String,
+    default: 'v2'
+  }, // Which generator produced this lesson (analytics/debugging)
+  validationStatus: {
+    type: String,
+    enum: ['valid', 'retried', 'fallback'],
+    default: 'valid'
+  }, // Outcome of local deterministic validation
   status: {
     type: String,
     enum: ['generated', 'notified', 'sent', 'completed'],

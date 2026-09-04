@@ -156,6 +156,7 @@ exports.handleWebhook = async (req, res, next) => {
               recentTopicDays: [],
               recentGrammarKeys: [],
               vocabBank: [],
+              recentScenarioTypes: [],
               weakAreas: [],
               difficultyScore: 0.5
             });
@@ -176,6 +177,8 @@ exports.handleWebhook = async (req, res, next) => {
             scenarioType: lessonData.scenarioType,
             lessonJson: lessonData.lessonJson,
             lessonText: lessonData.lessonText,
+            generationVersion: lessonData.generationVersion,
+            validationStatus: lessonData.validationStatus,
             status: 'sent',
             generatedAt: new Date(),
             sentAt: new Date()
@@ -200,6 +203,12 @@ exports.handleWebhook = async (req, res, next) => {
                 addedAt: new Date()
               });
             });
+          }
+          if (lessonData.scenarioType) {
+            tutorMemory.recentScenarioTypes.push(lessonData.scenarioType);
+            if (tutorMemory.recentScenarioTypes.length > 5) {
+              tutorMemory.recentScenarioTypes = tutorMemory.recentScenarioTypes.slice(-5);
+            }
           }
           await tutorMemory.save();
 
