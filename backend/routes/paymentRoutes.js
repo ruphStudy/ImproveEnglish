@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const paymentController = require('../controllers/paymentController');
+const adminAuth = require('../middleware/adminAuth');
 
 // Create Razorpay order
 router.post('/create-order', paymentController.createOrder);
@@ -16,6 +17,6 @@ router.get('/verify-upgrade', paymentController.verifyUpgradePayment);
 
 // Manual reconciliation - releases orders stuck in 'processing' (e.g. after a crash
 // mid-payment) so the next webhook/callback retry can safely complete them
-router.post('/reconcile-stuck', paymentController.reconcileStuckOrders);
+router.post('/reconcile-stuck', adminAuth, paymentController.reconcileStuckOrders);
 
 module.exports = router;

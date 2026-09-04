@@ -48,116 +48,129 @@ async function processLessonJob(userId) {
       return { status: 'skipped', reason: 'not_ready', userId };
     }
 
-    // Step 1: Fetch curriculum topic
-    const topic = await CurriculumTopic.findOne({
-      level: user.level,
-      day: user.currentDay,
-      isActive: true
-    }).lean(); // Use lean() for better performance
+    // Idempotency guard: a lesson may already exist for this user+day from a
+    // previous attempt that generated it but then failed before the
+    // WhatsApp notification/state update completed (e.g. a transient
+    // WhatsApp API error). Reuse it instead of calling the AI generator
+    // again - avoids duplicate Lesson records and duplicate OpenAI cost,
+    // and lets a Bull retry actually succeed instead of being silently
+    // defeated by the not_ready guard above.
+    let lesson = await Lesson.findOne({ userId: user._id, day: user.currentDay }).sort({ generatedAt: -1 });
+    let topicTitle;
 
-    if (!topic) {
-      console.error(`❌ No curriculum topic found for ${user.name} - Level: ${user.level}, Day: ${user.currentDay}`);
-      
-      await Log.create({
-        type: 'CURRICULUM_TOPIC_NOT_FOUND',
-        userPhone: user.phone,
-        message: `No curriculum topic for level=${user.level}, day=${user.currentDay}`,
-        status: 'ERROR',
-        metadata: {
-          level: user.level,
-          day: user.currentDay
-        }
-      });
-      
-      return { status: 'skipped', reason: 'no_topic', userId };
+    if (lesson && lesson.status === 'notified') {
+      console.log(`⏭️  Lesson already generated and notified for ${user.name} - Day ${user.currentDay}`);
+      return { status: 'skipped', reason: 'already_notified', userId };
     }
 
-    // Step 2: Fetch or create TutorMemory
-    let tutorMemory = await TutorMemory.findOne({ userId: user._id });
-    
-    if (!tutorMemory) {
-      console.log(`🆕 Creating new TutorMemory for ${user.name}`);
-      tutorMemory = await TutorMemory.create({
-        userId: user._id,
-        recentTopicDays: [],
-        recentGrammarKeys: [],
-        vocabBank: [],
-        weakAreas: [],
-        difficultyScore: 0.5
-      });
-    }
+    if (!lesson) {
+      // Step 1: Fetch curriculum topic
+      const topic = await CurriculumTopic.findOne({
+        level: user.level,
+        day: user.currentDay,
+        isActive: true
+      }).lean(); // Use lean() for better performance
 
-    // Step 3: Generate structured lesson with AI (this is the slow part - 21 seconds)
-    console.log(`🎓 Generating lesson for ${user.name} - Day ${user.currentDay}: ${topic.title}`);
-    
-    const lessonData = await generateLesson(user, topic, tutorMemory);
+      if (!topic) {
+        console.error(`❌ No curriculum topic found for ${user.name} - Level: ${user.level}, Day: ${user.currentDay}`);
 
-    // Step 4: Save lesson to Lessons collection
-    const lesson = await Lesson.create({
-      userId: user._id,
-      day: user.currentDay,
-      level: user.level,
-      topicTitle: topic.title,
-      grammarFocus: topic.grammarFocus,
-      scenarioType: lessonData.scenarioType,
-      lessonJson: lessonData.lessonJson,
-      lessonText: lessonData.lessonText,
-      status: 'generated',
-      generatedAt: new Date()
-    });
-
-    console.log(`💾 Lesson saved to database - ID: ${lesson._id}`);
-
-    // Step 5: Update TutorMemory
-    tutorMemory.recentTopicDays.push(user.currentDay);
-    if (tutorMemory.recentTopicDays.length > 7) {
-      tutorMemory.recentTopicDays = tutorMemory.recentTopicDays.slice(-7);
-    }
-
-    if (topic.grammarFocus && !tutorMemory.recentGrammarKeys.includes(topic.grammarFocus)) {
-      tutorMemory.recentGrammarKeys.push(topic.grammarFocus);
-      if (tutorMemory.recentGrammarKeys.length > 7) {
-        tutorMemory.recentGrammarKeys = tutorMemory.recentGrammarKeys.slice(-7);
-      }
-    }
-
-    // Add new vocabulary to vocab bank
-    if (lessonData.vocabList && lessonData.vocabList.length > 0) {
-      lessonData.vocabList.forEach(vocab => {
-        tutorMemory.vocabBank.push({
-          word: vocab.word,
-          day: user.currentDay,
-          addedAt: new Date()
+        await Log.create({
+          type: 'CURRICULUM_TOPIC_NOT_FOUND',
+          userPhone: user.phone,
+          message: `No curriculum topic for level=${user.level}, day=${user.currentDay}`,
+          status: 'ERROR',
+          metadata: {
+            level: user.level,
+            day: user.currentDay
+          }
         });
+
+        return { status: 'skipped', reason: 'no_topic', userId };
+      }
+      topicTitle = topic.title;
+
+      // Step 2: Fetch or create TutorMemory
+      let tutorMemory = await TutorMemory.findOne({ userId: user._id });
+
+      if (!tutorMemory) {
+        console.log(`🆕 Creating new TutorMemory for ${user.name}`);
+        tutorMemory = await TutorMemory.create({
+          userId: user._id,
+          recentTopicDays: [],
+          recentGrammarKeys: [],
+          vocabBank: [],
+          weakAreas: [],
+          difficultyScore: 0.5
+        });
+      }
+
+      // Step 3: Generate structured lesson with AI (this is the slow part - 21 seconds)
+      console.log(`🎓 Generating lesson for ${user.name} - Day ${user.currentDay}: ${topic.title}`);
+
+      const lessonData = await generateLesson(user, topic, tutorMemory);
+
+      // Step 4: Save lesson to Lessons collection
+      lesson = await Lesson.create({
+        userId: user._id,
+        day: user.currentDay,
+        level: user.level,
+        topicTitle: topic.title,
+        grammarFocus: topic.grammarFocus,
+        scenarioType: lessonData.scenarioType,
+        lessonJson: lessonData.lessonJson,
+        lessonText: lessonData.lessonText,
+        status: 'generated',
+        generatedAt: new Date()
       });
+
+      console.log(`💾 Lesson saved to database - ID: ${lesson._id}`);
+
+      // Step 5: Update TutorMemory
+      tutorMemory.recentTopicDays.push(user.currentDay);
+      if (tutorMemory.recentTopicDays.length > 7) {
+        tutorMemory.recentTopicDays = tutorMemory.recentTopicDays.slice(-7);
+      }
+
+      if (topic.grammarFocus && !tutorMemory.recentGrammarKeys.includes(topic.grammarFocus)) {
+        tutorMemory.recentGrammarKeys.push(topic.grammarFocus);
+        if (tutorMemory.recentGrammarKeys.length > 7) {
+          tutorMemory.recentGrammarKeys = tutorMemory.recentGrammarKeys.slice(-7);
+        }
+      }
+
+      // Add new vocabulary to vocab bank
+      if (lessonData.vocabList && lessonData.vocabList.length > 0) {
+        lessonData.vocabList.forEach(vocab => {
+          tutorMemory.vocabBank.push({
+            word: vocab.word,
+            day: user.currentDay,
+            addedAt: new Date()
+          });
+        });
+      }
+
+      await tutorMemory.save();
+      console.log(`🧠 TutorMemory updated for ${user.name}`);
+    } else {
+      topicTitle = lesson.topicTitle;
+      console.log(`♻️  Reusing previously generated lesson for ${user.name} - Day ${user.currentDay} (retry after earlier failure)`);
     }
 
-    await tutorMemory.save();
-    console.log(`🧠 TutorMemory updated for ${user.name}`);
-
-    // Step 6: Update user state
-    console.log(`📝 Updating user state for ${user.name}...`);
-    user.state = 'WAITING_START';
-    user.lessonDate = new Date();
-    user.lessonCompleted = false;
-    // Reset reminder flags for new lesson notification
-    user.noonReminderSent = false;
-    user.eveningReminderSent = false;
-    const notificationDate = new Date();
-    user.lastNotificationDate = notificationDate; // Track for 24-hour reminder window
-    await user.save();
-
-    // Step 7: Send WhatsApp notification
+    // Send WhatsApp notification BEFORE flipping user state. If this throws,
+    // user.state stays 'READY' and the lesson stays 'generated', so a Bull
+    // retry will legitimately re-enter this function, hit the reuse branch
+    // above, and just retry the send - instead of being skipped forever by
+    // the not_ready guard.
     const streakMessage =
       user.streak > 0
         ? `🔥 Current Streak: ${user.streak} day${user.streak > 1 ? 's' : ''}. Reply START to receive today's lesson.`
         : `Reply START to receive today's lesson and begin your streak!`;
-    
+
     await sendTemplateMessage(
-      user.phone, 
-      'daily_lesson_notification', 
+      user.phone,
+      'daily_lesson_notification',
       [
-        user.name, 
+        user.name,
         user.currentDay.toString(),
         streakMessage
       ],
@@ -168,28 +181,39 @@ async function processLessonJob(userId) {
     lesson.status = 'notified';
     lesson.notifiedAt = new Date();
     await lesson.save();
-    
+
+    // Update user state now that the notification actually went out
+    console.log(`📝 Updating user state for ${user.name}...`);
+    user.state = 'WAITING_START';
+    user.lessonDate = new Date();
+    user.lessonCompleted = false;
+    // Reset reminder flags for new lesson notification
+    user.noonReminderSent = false;
+    user.eveningReminderSent = false;
+    user.lastNotificationDate = new Date(); // Track for 24-hour reminder window
+    await user.save();
+
     const duration = Date.now() - startTime;
     console.log(`✅ Lesson sent to ${user.name} (${user.phone}) - Day ${user.currentDay} (${duration}ms)`);
-    
-    await Log.create({ 
-      type: 'LESSON_GENERATED', 
-      phone: user.phone, 
+
+    await Log.create({
+      type: 'LESSON_GENERATED',
+      phone: user.phone,
       message: `Structured lesson generated and notified for day ${user.currentDay}`,
       metadata: {
         lessonId: lesson._id.toString(),
-        topic: topic.title,
+        topic: topicTitle,
         duration: `${duration}ms`,
         lastNotificationDate: user.lastNotificationDate
       }
     });
-    
-    return { 
-      status: 'success', 
-      userId, 
-      userName: user.name, 
+
+    return {
+      status: 'success',
+      userId,
+      userName: user.name,
       day: user.currentDay,
-      duration 
+      duration
     };
     
   } catch (error) {

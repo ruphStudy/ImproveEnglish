@@ -11,6 +11,10 @@ const { runExpiryReminderJob } = require('../cron/expiryReminder');
 const { runStreakResetJob } = require('../cron/streakReset');
 const { runWeeklySummaryJob } = require('../cron/weeklySummary');
 const { lessonQueue } = require('../config/queueConfig');
+const adminAuth = require('../middleware/adminAuth');
+
+// Entire router is internal operational/testing tooling - protect all of it.
+router.use(adminAuth);
 
 /**
  * Manual Cron Trigger - For Testing (V3 - Queue-Based)
@@ -51,11 +55,14 @@ const triggerDailyLesson = async (req, res) => {
       });
     }
     
-    // Enqueue all users to Bull Queue
-    const jobPromises = users.map(user => 
+    // Enqueue all users to Bull Queue. Same deterministic jobId scheme as the
+    // scheduled cron so a manual trigger can never double-enqueue a user who
+    // is already queued/generated for their current day.
+    const jobPromises = users.map(user =>
       lessonQueue.add(
         { userId: user._id.toString() },
-        { 
+        {
+          jobId: `lesson-${user._id}-day${user.currentDay}`,
           attempts: 3,
           backoff: { type: 'exponential', delay: 5000 },
           removeOnComplete: 100,

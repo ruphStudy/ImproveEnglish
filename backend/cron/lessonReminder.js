@@ -2,6 +2,7 @@ const cron = require('node-cron');
 const User = require('../models/User');
 const Log = require('../models/Log');
 const { sendWhatsAppMessage, sendTemplateMessage } = require('../services/whatsappService');
+const { runWithCronLock } = require('../utils/cronLock');
 
 /**
  * Lesson Reminder System - Nudge users who haven't replied START yet
@@ -35,6 +36,10 @@ function isToday(date) {
  * Run Noon Reminder Job - Can be called by cron or manually
  */
 async function runNoonReminderJob() {
+  return runWithCronLock('noon-reminder', 1800, runNoonReminderJobInner);
+}
+
+async function runNoonReminderJobInner() {
   try {
     console.log('🔔 Noon lesson reminder check started');
     const today = new Date();
@@ -158,6 +163,10 @@ async function runNoonReminderJob() {
  * Run Evening Reminder Job - Can be called by cron or manually
  */
 async function runEveningReminderJob() {
+  return runWithCronLock('evening-reminder', 1800, runEveningReminderJobInner);
+}
+
+async function runEveningReminderJobInner() {
   try {
     console.log('🔔 Evening lesson reminder check started');
     const now = new Date();

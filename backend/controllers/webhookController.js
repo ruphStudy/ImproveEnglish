@@ -9,8 +9,7 @@ const { validatePromoCode } = require('../services/promoService');
 const Razorpay = require('razorpay');
 const PendingOrder = require('../models/PendingOrder');
 const PlanMaster = require('../models/PlanMaster');
-
-const dedupedMessages = new Set();
+const { isDuplicateMessage } = require('../utils/whatsappDedupe');
 
 // Initialize Razorpay
 const razorpay = new Razorpay({
@@ -60,24 +59,27 @@ exports.handleWebhook = async (req, res, next) => {
     for (const msg of entry.messages) {
       console.log(`📱 Processing message: ID=${msg.id}, From=${msg.from}, Text=${msg.text?.body}`);
       
-      if (dedupedMessages.has(msg.id)) {
+      if (await isDuplicateMessage(msg.id)) {
         console.log(`⏭️ Duplicate message skipped: ${msg.id}`);
         continue;
       }
-      dedupedMessages.add(msg.id);
-      
+
+      // Isolate each message: one message's failure (bad data, a transient
+      // DB/API error) must not abort the rest of the batch or turn an
+      // otherwise-fine webhook delivery into a 500 that Meta will retry.
+      try {
       const phone = msg.from;
       const text = msg.text?.body?.trim().toUpperCase();
       const user = await User.findOne({ phone });
-      
+
       if (!user) {
         console.log(`⚠️ User not found for phone: ${phone}`);
         continue;
       }
-      
+
       console.log(`👤 User found: ${user.name} (${phone}) - State: ${user.state}`);
-      await Log.create({ type: 'MESSAGE_RECEIVED', phone, message: text || '[AUDIO]' });
-      
+      await Log.create({ type: 'MESSAGE_RECEIVED', phone, message: text || `[${msg.type || 'UNKNOWN'}]` });
+
       // Handle AUDIO messages - Voice Evaluation
       if (msg.type === 'audio') {
         console.log(`🎤 Audio message received from ${phone}`);
@@ -695,6 +697,15 @@ exports.handleWebhook = async (req, res, next) => {
       }
       else {
         console.log(`ℹ️ Message "${text}" ignored - User state: ${user.state}`);
+      }
+      } catch (msgErr) {
+        console.error(`❌ Error processing message ${msg.id} from ${msg.from}:`, msgErr.message);
+        await Log.create({
+          type: 'WEBHOOK_MESSAGE_ERROR',
+          phone: msg.from,
+          message: `Failed to process message ${msg.id}: ${msgErr.message}`,
+          status: 'ERROR'
+        }).catch(() => {});
       }
     }
     res.sendStatus(200);

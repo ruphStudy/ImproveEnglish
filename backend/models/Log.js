@@ -40,6 +40,10 @@ const logSchema = new mongoose.Schema({
       'UPGRADE_ORDER_CREATED',
       'DUPLICATE_PAYMENT',
       'SUBSCRIPTION_EXPIRED',
+      'PAYMENT_RECONCILE',
+      'CRON_LOCK_SKIP',
+      'WEBHOOK_MESSAGE_ERROR',
+      'QUEUE_JOB_FAILED',
       'ERROR'
     ],
     required: true

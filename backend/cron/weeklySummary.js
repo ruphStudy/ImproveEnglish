@@ -2,6 +2,7 @@ const cron = require('node-cron');
 const User = require('../models/User');
 const { sendTemplateMessage } = require('../services/whatsappService');
 const Log = require('../models/Log');
+const { runWithCronLock } = require('../utils/cronLock');
 
 /**
  * Weekly Summary Cron - Runs every Sunday at 6:00 PM IST
@@ -10,6 +11,10 @@ const Log = require('../models/Log');
  */
 
 async function runWeeklySummaryJob() {
+  return runWithCronLock('weekly-summary', 1800, runWeeklySummaryJobInner);
+}
+
+async function runWeeklySummaryJobInner() {
   try {
     console.log('📊 Weekly summary cron started at 6:00 PM Sunday');
     

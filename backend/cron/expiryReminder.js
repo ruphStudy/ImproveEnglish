@@ -2,6 +2,7 @@ const cron = require('node-cron');
 const User = require('../models/User');
 const { sendTemplateMessage } = require('../services/whatsappService');
 const Log = require('../models/Log');
+const { runWithCronLock } = require('../utils/cronLock');
 
 /**
  * Expiry Reminder Cron - Runs daily at 9:00 AM IST
@@ -12,6 +13,10 @@ const Log = require('../models/Log');
  */
 
 async function runExpiryReminderJob() {
+  return runWithCronLock('expiry-reminder', 1800, runExpiryReminderJobInner);
+}
+
+async function runExpiryReminderJobInner() {
   try {
     console.log('🔔 Expiry reminder check started at 9:00 AM');
     

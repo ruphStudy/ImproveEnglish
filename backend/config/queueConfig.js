@@ -45,6 +45,17 @@ lessonQueue.on('error', (error) => {
 
 lessonQueue.on('failed', (job, err) => {
   console.error(`[Job Failed] Job ${job.id} failed:`, err.message);
+  // Only log to the operational Log collection once retries are exhausted -
+  // avoids flooding it with transient/retryable failures.
+  if (job.attemptsMade >= job.opts.attempts) {
+    const Log = require('../models/Log');
+    Log.create({
+      type: 'QUEUE_JOB_FAILED',
+      message: `Lesson job ${job.id} failed after ${job.attemptsMade} attempts: ${err.message}`,
+      status: 'ERROR',
+      metadata: { jobId: job.id, userId: job.data?.userId, attemptsMade: job.attemptsMade }
+    }).catch((logErr) => console.error('[Queue] Failed to log job failure:', logErr.message));
+  }
 });
 
 lessonQueue.on('completed', (job) => {

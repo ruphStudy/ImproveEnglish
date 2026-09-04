@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const PromoCode = require('../models/PromoCode');
 const { validatePromoCode } = require('../services/promoService');
+const adminAuth = require('../middleware/adminAuth');
 
 /**
  * Validate promo code
@@ -73,7 +74,7 @@ router.post('/validate', async (req, res) => {
  * Get active promo codes (admin only - for testing)
  * GET /api/promo/active
  */
-router.get('/active', async (req, res) => {
+router.get('/active', adminAuth, async (req, res) => {
   try {
     const promos = await PromoCode.find({ 
       isActive: true,
@@ -102,7 +103,7 @@ router.get('/active', async (req, res) => {
  * Create promo code (admin only - for testing)
  * POST /api/promo/create
  */
-router.post('/create', async (req, res) => {
+router.post('/create', adminAuth, async (req, res) => {
   try {
     const promoData = req.body;
     
