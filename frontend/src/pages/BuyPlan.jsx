@@ -462,7 +462,7 @@ export default function BuyPlan() {
         </div>
       </div>
       
-      <Footer /iv>
+      <Footer />
       </div>
     </div>
   );

@@ -358,8 +358,9 @@ exports.handleWebhook = async (req, res, next) => {
         });
         
         // Send main streak confirmation message
-        // (Removed duplicate plain message, now only template is sent)
-          'en'
+        await sendWhatsAppMessage(
+          phone,
+          `🔥 Great job ${user.name}!\n\nYour current streak is ${user.streak} day${user.streak > 1 ? 's' : ''}.\n\nComplete tomorrow's lesson to keep it growing!`
         );
         
         // Check for milestone celebrations (only if streak was actually incremented)
@@ -472,7 +473,7 @@ exports.handleWebhook = async (req, res, next) => {
         console.log(`✅ Upgrade options sent to ${user.name}`);
       }
       // Handle plan selection: Can be "30", "90", "365" OR "beginner 90", "B90", "I 30" OR "90 PROMO50", "B 90 SAVE20", etc.
-      else if (text.match(/^(beginner|intermediate|advanced|b|i|a)?\s*(30|90|365)(\s+[A-Za-z0-9]+)?$/i) || ['30', '90', '365'].includes(text)) {
+      else if ((text && text.match(/^(beginner|intermediate|advanced|b|i|a)?\s*(30|90|365)(\s+[A-Za-z0-9]+)?$/i)) || ['30', '90', '365'].includes(text)) {
         console.log(`📅 User ${phone} selected plan: ${text}`);
         
         // Parse input
