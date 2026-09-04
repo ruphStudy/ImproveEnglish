@@ -58,42 +58,58 @@ async function processSuccessfulPayment({ pendingOrder, razorpayPaymentId, payme
   try {
     const existingUser = await User.findOne({ phone: claimed.phone });
     const isNewUser = !existingUser;
-    const levelChanged = !!existingUser && existingUser.level !== claimed.level;
-    const newExpiryDate = computeExtendedExpiry(existingUser ? existingUser.expiryDate : null, claimed.planDuration);
 
-    let user;
-    if (isNewUser) {
-      user = new User({
-        name: claimed.name,
-        phone: claimed.phone,
-        email: claimed.email,
-        level: claimed.level,
-        isActive: true,
-        state: 'READY',
-        currentDay: 1,
-        lessonText: '',
-        lessonCompleted: false,
-        expiryDate: newExpiryDate
-      });
-    } else {
-      existingUser.isActive = true;
-      existingUser.expiryDate = newExpiryDate;
-      existingUser.level = claimed.level;
-      existingUser.name = claimed.name || existingUser.name;
-      existingUser.email = claimed.email || existingUser.email;
-      // Same level: preserve currentDay/state/progress. Different level: restart at Day 1.
-      // Streak is never reset here either way.
-      if (levelChanged) {
-        existingUser.currentDay = 1;
-        existingUser.state = 'READY';
-        existingUser.lessonText = '';
-        existingUser.lessonCompleted = false;
-      }
-      existingUser.sevenDayReminderSent = false;
-      existingUser.threeDayReminderSent = false;
+    // Crash/retry safety: if this exact Razorpay payment was already applied to this
+    // user (e.g. the process died after user.save() but before PendingOrder reached
+    // 'paid', and reconciliation later released the claim), skip re-mutating the user
+    // entirely instead of extending expiry / resetting progress a second time.
+    const alreadyAppliedToUser = !!existingUser && existingUser.lastAppliedPaymentId === razorpayPaymentId;
+
+    let user, levelChanged, newExpiryDate;
+
+    if (alreadyAppliedToUser) {
       user = existingUser;
+      levelChanged = false;
+      newExpiryDate = existingUser.expiryDate;
+    } else {
+      levelChanged = !!existingUser && existingUser.level !== claimed.level;
+      newExpiryDate = computeExtendedExpiry(existingUser ? existingUser.expiryDate : null, claimed.planDuration);
+
+      if (isNewUser) {
+        user = new User({
+          name: claimed.name,
+          phone: claimed.phone,
+          email: claimed.email,
+          level: claimed.level,
+          isActive: true,
+          state: 'READY',
+          currentDay: 1,
+          lessonText: '',
+          lessonCompleted: false,
+          expiryDate: newExpiryDate,
+          lastAppliedPaymentId: razorpayPaymentId
+        });
+      } else {
+        existingUser.isActive = true;
+        existingUser.expiryDate = newExpiryDate;
+        existingUser.level = claimed.level;
+        existingUser.name = claimed.name || existingUser.name;
+        existingUser.email = claimed.email || existingUser.email;
+        // Same level: preserve currentDay/state/progress. Different level: restart at Day 1.
+        // Streak is never reset here either way.
+        if (levelChanged) {
+          existingUser.currentDay = 1;
+          existingUser.state = 'READY';
+          existingUser.lessonText = '';
+          existingUser.lessonCompleted = false;
+        }
+        existingUser.sevenDayReminderSent = false;
+        existingUser.threeDayReminderSent = false;
+        existingUser.lastAppliedPaymentId = razorpayPaymentId;
+        user = existingUser;
+      }
+      await user.save();
     }
-    await user.save();
 
     try {
       await PaymentHistory.create({
@@ -170,16 +186,48 @@ async function processSuccessfulPayment({ pendingOrder, razorpayPaymentId, payme
 }
 
 /**
- * Minimal reconciliation: releases PendingOrders stuck in 'processing' (e.g. the
- * process crashed mid-flight before the catch handler could revert them) so the
- * next webhook delivery/manual retry can pick them back up. Does not call Razorpay.
+ * Minimal reconciliation for PendingOrders stuck in 'processing' (e.g. the process
+ * crashed mid-flight before the catch handler could revert them). Does not call
+ * Razorpay.
+ *
+ * For each stuck order:
+ *  - If a PaymentHistory record already exists for its razorpayPaymentId, processing
+ *    had already completed its persistent side effects before the crash - finalize
+ *    directly to 'paid' rather than releasing it (releasing would just cause a
+ *    pointless full re-run; processSuccessfulPayment's per-step idempotency would
+ *    no-op it anyway, but finalizing directly avoids that work).
+ *  - Otherwise release it back to 'created'. This is safe: processSuccessfulPayment's
+ *    user mutation is itself guarded by User.lastAppliedPaymentId and promo
+ *    consumption by a per-order filter, so a replay cannot double-extend expiry,
+ *    double-reset progress, or double-consume a promo code even if the crash
+ *    happened after those steps had already run.
  */
 async function reconcileStuckPendingOrders(maxAgeMinutes = 15) {
   const cutoff = new Date(Date.now() - maxAgeMinutes * 60 * 1000);
   const stuck = await PendingOrder.find({ status: 'processing', updatedAt: { $lt: cutoff } });
 
   let released = 0;
+  let finalized = 0;
+
   for (const order of stuck) {
+    const existingHistory = order.razorpayPaymentId
+      ? await PaymentHistory.findOne({ razorpayPaymentId: order.razorpayPaymentId })
+      : null;
+
+    if (existingHistory) {
+      order.status = 'paid';
+      await order.save();
+      finalized++;
+      await Log.create({
+        type: 'PAYMENT_RECONCILE',
+        userPhone: order.phone,
+        message: `Finalized stuck processing order ${order._id} to paid (PaymentHistory already recorded)`,
+        status: 'INFO',
+        metadata: { pendingOrderId: order._id.toString(), razorpayPaymentId: order.razorpayPaymentId }
+      });
+      continue;
+    }
+
     order.status = 'created';
     await order.save();
     released++;
@@ -192,7 +240,7 @@ async function reconcileStuckPendingOrders(maxAgeMinutes = 15) {
     });
   }
 
-  return { checked: stuck.length, released };
+  return { checked: stuck.length, released, finalized };
 }
 
 module.exports = { processSuccessfulPayment, reconcileStuckPendingOrders, computeExtendedExpiry };

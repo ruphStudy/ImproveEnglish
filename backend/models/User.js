@@ -58,6 +58,10 @@ const userSchema = new mongoose.Schema({
     type: Date,
     default: null
   }, // Date when lesson notification was sent (for 24-hour tracking)
+  lastAppliedPaymentId: {
+    type: String,
+    default: null
+  }, // Razorpay payment ID last applied to this user's subscription - guards a crashed/retried payment from double-extending expiry or resetting progress twice
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
 });

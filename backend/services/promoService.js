@@ -172,8 +172,14 @@ async function validatePromoCode(code, userId, amount, level, duration, userPhon
  */
 async function markPromoAsUsed(code, userId, userName, userPhone, originalAmount, discountAmount, finalAmount, orderId) {
   try {
-    await PromoCode.findOneAndUpdate(
-      { code: code.toUpperCase().trim() },
+    // Idempotency guard: only apply if no usedBy entry for this exact order already
+    // exists. A retried/duplicate call for the same order therefore matches nothing
+    // and safely no-ops instead of incrementing currentUses / pushing a second entry.
+    const result = await PromoCode.findOneAndUpdate(
+      {
+        code: code.toUpperCase().trim(),
+        ...(orderId ? { 'usedBy.orderId': { $ne: orderId } } : {})
+      },
       {
         $inc: { currentUses: 1 },
         $push: {
@@ -188,12 +194,18 @@ async function markPromoAsUsed(code, userId, userName, userPhone, originalAmount
             orderId: orderId || null
           }
         }
-      }
+      },
+      { new: true }
     );
-    
+
+    if (!result) {
+      console.log(`ℹ️ Promo code ${code} already recorded as used for order ${orderId} - skipping duplicate`);
+      return { success: true, alreadyUsed: true };
+    }
+
     console.log(`✅ Promo code ${code} marked as used by ${userName}`);
     return { success: true };
-    
+
   } catch (err) {
     console.error('❌ Error marking promo as used:', err);
     return { success: false, error: err.message };

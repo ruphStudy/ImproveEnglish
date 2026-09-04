@@ -7,11 +7,13 @@ jest.mock('../models/User', () => {
 jest.mock('../models/PendingOrder', () => ({
   findOneAndUpdate: jest.fn(),
   findById: jest.fn(),
-  updateOne: jest.fn()
+  updateOne: jest.fn(),
+  find: jest.fn()
 }));
 
 jest.mock('../models/PaymentHistory', () => ({
-  create: jest.fn()
+  create: jest.fn(),
+  findOne: jest.fn()
 }));
 
 jest.mock('../models/Log', () => ({
@@ -28,7 +30,7 @@ const PendingOrder = require('../models/PendingOrder');
 const PaymentHistory = require('../models/PaymentHistory');
 const Log = require('../models/Log');
 const { markPromoAsUsed } = require('../services/promoService');
-const { processSuccessfulPayment } = require('../services/paymentProcessingService');
+const { processSuccessfulPayment, reconcileStuckPendingOrders } = require('../services/paymentProcessingService');
 
 // Both the payment.captured webhook and the Payment Link callback call
 // processSuccessfulPayment with the same shape of arguments, so exercising
@@ -367,5 +369,79 @@ describe('processSuccessfulPayment - promo consumption', () => {
 
     expect(markPromoAsUsed).toHaveBeenCalledTimes(1);
     expect(markPromoAsUsed).toHaveBeenCalledWith('SAVE20', expect.any(String), expect.any(String), expect.any(String), 500, 100, 500, claimed._id.toString());
+  });
+});
+
+describe('processSuccessfulPayment - crash then retry safety', () => {
+  test('crash after User modification but before PendingOrder reaches paid: retry does not double-extend expiry, double-reset progress, double-consume promo, or duplicate PaymentHistory', async () => {
+    const pendingOrder = makeClaimedOrder({
+      status: 'created', level: 'intermediate', planDuration: 30,
+      promoCode: 'SAVE20', discountAmountPaise: 10000, originalAmountPaise: 50000
+    });
+    const sharedUser = makeExistingUser({ level: 'beginner', currentDay: 24, streak: 9, expiryDate: null });
+
+    // --- Attempt 1: claim succeeds, user is mutated (level change + expiry extension),
+    // then PaymentHistory.create fails hard - simulates a crash/transient DB failure
+    // right after the user write landed but before the order reached 'paid'.
+    const claim1 = makeClaimedOrder({ status: 'processing', level: 'intermediate', planDuration: 30, promoCode: 'SAVE20' });
+    PendingOrder.findOneAndUpdate.mockResolvedValueOnce(claim1);
+    User.findOne.mockResolvedValueOnce(sharedUser);
+    PaymentHistory.create.mockRejectedValueOnce(new Error('disk full'));
+
+    await expect(processSuccessfulPayment({
+      pendingOrder, razorpayPaymentId: 'pay_crash', paymentMethod: 'upi', amountPaidPaise: pendingOrder.amountPaise
+    })).rejects.toThrow('disk full');
+
+    expect(sharedUser.lastAppliedPaymentId).toBe('pay_crash');
+    expect(sharedUser.level).toBe('intermediate');
+    expect(sharedUser.currentDay).toBe(1); // reset once, level changed
+    const expiryAfterAttempt1 = sharedUser.expiryDate;
+    expect(expiryAfterAttempt1).toBeTruthy();
+    expect(markPromoAsUsed).not.toHaveBeenCalled(); // crash happened before this step
+
+    // --- Attempt 2: reconciliation released the order back to 'created', a retry arrives
+    // for the SAME Razorpay payment ID. User.findOne now returns the already-mutated user.
+    const claim2 = makeClaimedOrder({ status: 'processing', level: 'intermediate', planDuration: 30, promoCode: 'SAVE20' });
+    PendingOrder.findOneAndUpdate.mockResolvedValueOnce(claim2);
+    User.findOne.mockResolvedValueOnce(sharedUser);
+    PaymentHistory.create.mockResolvedValueOnce({}); // succeeds this time
+    sharedUser.save.mockClear();
+
+    const result2 = await processSuccessfulPayment({
+      pendingOrder, razorpayPaymentId: 'pay_crash', paymentMethod: 'upi', amountPaidPaise: pendingOrder.amountPaise
+    });
+
+    expect(result2.success).toBe(true);
+    expect(result2.alreadyProcessed).toBe(false);
+    expect(sharedUser.save).not.toHaveBeenCalled(); // user mutation skipped on retry
+    expect(sharedUser.expiryDate).toBe(expiryAfterAttempt1); // NOT extended a second time
+    expect(sharedUser.currentDay).toBe(1); // not reset again
+    expect(PaymentHistory.create).toHaveBeenCalledTimes(2); // 1st failed, 2nd (retry) succeeded
+    expect(markPromoAsUsed).toHaveBeenCalledTimes(1); // consumed exactly once, on the retry
+    expect(claim2.status).toBe('paid');
+  });
+});
+
+describe('reconcileStuckPendingOrders', () => {
+  test('finalizes directly to paid when PaymentHistory already exists (does not replay business logic)', async () => {
+    const stuckOrder = makeClaimedOrder({ status: 'processing', razorpayPaymentId: 'pay_done' });
+    PendingOrder.find.mockResolvedValue([stuckOrder]);
+    PaymentHistory.findOne.mockResolvedValue({ razorpayPaymentId: 'pay_done' });
+
+    const result = await reconcileStuckPendingOrders(15);
+
+    expect(stuckOrder.status).toBe('paid');
+    expect(result).toEqual({ checked: 1, released: 0, finalized: 1 });
+  });
+
+  test('releases back to created when no PaymentHistory exists yet', async () => {
+    const stuckOrder = makeClaimedOrder({ status: 'processing', razorpayPaymentId: 'pay_incomplete' });
+    PendingOrder.find.mockResolvedValue([stuckOrder]);
+    PaymentHistory.findOne.mockResolvedValue(null);
+
+    const result = await reconcileStuckPendingOrders(15);
+
+    expect(stuckOrder.status).toBe('created');
+    expect(result).toEqual({ checked: 1, released: 1, finalized: 0 });
   });
 });
