@@ -56,7 +56,7 @@ const pendingOrderSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['created', 'paid', 'failed'],
+    enum: ['created', 'processing', 'paid', 'failed'],
     default: 'created'
   },
   type: {

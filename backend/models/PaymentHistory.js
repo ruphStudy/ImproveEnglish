@@ -59,7 +59,8 @@ const paymentHistorySchema = new mongoose.Schema({
   },
   razorpayPaymentId: {
     type: String,
-    required: true
+    required: true,
+    unique: true // Prevents duplicate PaymentHistory rows for the same Razorpay payment
   },
   paymentMethod: {
     type: String // card, upi, netbanking, wallet

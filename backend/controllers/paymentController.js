@@ -5,7 +5,7 @@ const User = require('../models/User');
 const Log = require('../models/Log');
 const whatsappService = require('../services/whatsappService');
 const PlanMaster = require('../models/PlanMaster');
-const PaymentHistory = require('../models/PaymentHistory');
+const { processSuccessfulPayment, reconcileStuckPendingOrders } = require('../services/paymentProcessingService');
 
 // Initialize Razorpay
 const razorpay = new Razorpay({
@@ -217,10 +217,11 @@ exports.handleWebhook = async (req, res) => {
         return res.status(200).json({ success: true, message: 'Order not found, ignored' });
       }
 
-      // Update order ID if found by payment link ID (for future reference)
+      // Persist order ID correction if this order was matched via payment link ID
       if (pendingOrder.razorpayOrderId !== orderId) {
         console.log(`📝 Updating order ID from ${pendingOrder.razorpayOrderId} to ${orderId}`);
         pendingOrder.razorpayOrderId = orderId;
+        await pendingOrder.save();
       }
 
       console.log('📝 Order Details:');
@@ -231,280 +232,70 @@ exports.handleWebhook = async (req, res) => {
       console.log(`   Plan: ${pendingOrder.planDuration} days`);
       console.log(`   Status: ${pendingOrder.status}`);
 
-      // Check if already processed
-      if (pendingOrder.status === 'paid') {
-        console.log(`⚠️ Order ${orderId} already processed`);
-        console.log('🔔 ========== WEBHOOK END (ALREADY PROCESSED) ==========\n');
-        return res.status(200).json({ success: true, message: 'Already processed' });
-      }
-
-      // Verify amount
-      console.log(`💵 Amount Verification:`);
-      console.log(`   Expected: ₹${pendingOrder.amountPaise / 100}`);
-      console.log(`   Received: ₹${amountPaid / 100}`);
-      console.log(`   Match: ${amountPaid === pendingOrder.amountPaise ? '✅ YES' : '❌ NO'}`);
-      
-      if (amountPaid !== pendingOrder.amountPaise) {
-        console.log(`⚠️ Amount mismatch for ${orderId}: expected ${pendingOrder.amountPaise}, got ${amountPaid}`);
+      // Delegate to the single payment processor so webhook and Payment Link callback
+      // can never both apply the success side effects for the same order.
+      let result;
+      try {
+        result = await processSuccessfulPayment({
+          pendingOrder,
+          razorpayPaymentId: paymentId,
+          paymentMethod: payment.method,
+          amountPaidPaise: amountPaid
+        });
+      } catch (procErr) {
+        console.error('❌ Payment processing failed:', procErr);
         await Log.create({
           type: 'PAYMENT_ERROR',
           userPhone: pendingOrder.phone,
-          message: 'Amount mismatch in payment',
-          status: 'ERROR',
-          metadata: { orderId, expected: pendingOrder.amountPaise, received: amountPaid }
+          message: `Webhook processing failed: ${procErr.message}`,
+          status: 'ERROR'
         });
+        console.log('🔔 ========== WEBHOOK END (PROCESSING ERROR - WILL RETRY) ==========\n');
+        // Non-200 so Razorpay retries; the claim was released internally, so retry is safe
+        return res.status(500).json({ success: false, message: 'Processing failed' });
+      }
+
+      if (!result.success) {
+        console.log(`⚠️ Amount mismatch for ${orderId}`);
         console.log('🔔 ========== WEBHOOK END (AMOUNT MISMATCH) ==========\n');
         return res.status(200).json({ success: true, message: 'Amount mismatch' });
       }
 
-      // Check if user already exists
-      console.log(`🔍 Checking if user exists: ${pendingOrder.phone}`);
-      const existingUser = await User.findOne({ phone: pendingOrder.phone });
-      console.log('👤 Existing user found:', existingUser ? 'YES' : 'NO');
-      if (existingUser) {
-        console.log(`   User ID: ${existingUser._id}`);
-        console.log(`   Is Active: ${existingUser.isActive}`);
-        console.log(`   State: ${existingUser.state}`);
+      if (result.alreadyProcessed) {
+        console.log(`⚠️ Order ${orderId} already processed (status: ${result.status})`);
+        console.log('🔔 ========== WEBHOOK END (ALREADY PROCESSED) ==========\n');
+        return res.status(200).json({ success: true, message: 'Already processed' });
       }
 
-      // === HANDLE UPGRADE TYPE ===
-      if (pendingOrder.type === 'upgrade') {
-        console.log('🔄 Processing UPGRADE payment...');
-        
-        if (!existingUser) {
-          console.log(`❌ Upgrade payment but user not found: ${pendingOrder.phone}`);
-          return res.status(200).json({ success: true, message: 'User not found for upgrade' });
-        }
-        
-        // Calculate new expiry date
-        const today = new Date();
-        const extensionDays = pendingOrder.planDuration;
-        let newExpiryDate;
-        
-        if (existingUser.expiryDate && existingUser.expiryDate > today) {
-          // Extend from current expiry date
-          newExpiryDate = new Date(existingUser.expiryDate);
-          newExpiryDate.setDate(newExpiryDate.getDate() + extensionDays);
-          console.log(`📅 Extending from existing expiry: ${existingUser.expiryDate.toISOString().split('T')[0]} + ${extensionDays} days`);
-        } else {
-          // Start from today if expired or no expiry date
-          newExpiryDate = new Date();
-          newExpiryDate.setDate(newExpiryDate.getDate() + extensionDays);
-          console.log(`📅 Starting from today + ${extensionDays} days`);
-        }
-        
-        console.log(`📅 New Expiry Date: ${newExpiryDate.toISOString().split('T')[0]}`);
-        
-        // Update user - extend subscription without resetting progress
-        existingUser.expiryDate = newExpiryDate;
-        existingUser.isActive = true;
-        // Reset reminder flags for new subscription period
-        existingUser.sevenDayReminderSent = false;
-        existingUser.threeDayReminderSent = false;
-        // DO NOT reset: currentDay, streak, lastLessonCompletedDate, state
-        
-        const user = await existingUser.save();
-        console.log(`✅ Subscription extended successfully`);
-        console.log(`   User: ${user.name}`);
-        console.log(`   New Expiry: ${user.expiryDate.toISOString().split('T')[0]}`);
-        console.log(`   Streak Preserved: ${user.streak}`);
-        console.log(`   Current Day Preserved: ${user.currentDay}`);
-        
-        // Update pending order status
-        pendingOrder.status = 'paid';
-        await pendingOrder.save();
-        
-        // Save payment history
-        console.log('💳 Saving payment history...');
-        await PaymentHistory.create({
-          userId: user._id,
-          name: pendingOrder.name,
-          phone: pendingOrder.phone,
-          email: pendingOrder.email,
-          level: pendingOrder.level,
-          planDuration: pendingOrder.planDuration,
-          planName: `plan${pendingOrder.planDuration}`,
-          amountPaid: amountPaid / 100,
-          currency: 'INR',
-          razorpayOrderId: orderId,
-          razorpayPaymentId: paymentId,
-          paymentMethod: payment.method || 'unknown',
-          paymentStatus: 'success',
-          expiryDate: newExpiryDate,
-          utmSource: pendingOrder.utmSource
-        });
-        console.log('✅ Payment history saved');
-        
-        // Send WhatsApp confirmation
-        const formattedDate = newExpiryDate.toLocaleDateString('en-IN', {
-          day: 'numeric',
-          month: 'long',
-          year: 'numeric'
-        });
-        
-        await whatsappService.sendWhatsAppMessage(
-          pendingOrder.phone,
-          `🎉 Upgrade successful!\n\nYour plan is now active until ${formattedDate}.\n\nKeep up your streak of ${user.streak} day${user.streak !== 1 ? 's' : ''}! 🔥`
-        );
-        
-        await Log.create({
-          type: 'UPGRADE_SUCCESS',
-          userPhone: pendingOrder.phone,
-          message: `Subscription extended by ${extensionDays} days`,
-          status: 'SUCCESS',
-          metadata: {
-            orderId,
-            paymentId,
-            newExpiryDate,
-            extensionDays,
-            streakPreserved: user.streak
-          }
-        });
-        
-        console.log('🔔 ========== WEBHOOK END (UPGRADE SUCCESS) ==========\n');
-        return res.status(200).json({ success: true, message: 'Upgrade successful' });
-      }
+      const { user, newExpiryDate, isNewUser, levelChanged } = result;
+      console.log(`✅ Payment processed. New user: ${isNewUser}, Level changed: ${levelChanged}`);
+      console.log(`   New Expiry: ${newExpiryDate.toISOString().split('T')[0]}`);
+      console.log(`   Streak Preserved: ${user.streak}`);
 
-      // === HANDLE NEW USER TYPE (DEFAULT) ===
-      if (existingUser && existingUser.isActive) {
-        console.log(`⚠️ User ${pendingOrder.phone} already active, duplicate payment`);
-        
-        // Update pending order status
-        pendingOrder.status = 'paid';
-        await pendingOrder.save();
-
-        // Log duplicate payment
-        await Log.create({
-          type: 'DUPLICATE_PAYMENT',
-          userPhone: pendingOrder.phone,
-          message: 'Payment received for already active user',
-          status: 'WARNING',
-          metadata: { orderId, paymentId }
-        });
-        
-        console.log('🔔 ========== WEBHOOK END (DUPLICATE PAYMENT) ==========\n');
-        return res.status(200).json({ success: true, message: 'User already active' });
-      }
-
-      // Calculate expiry date
-      const expiryDate = new Date();
-      expiryDate.setDate(expiryDate.getDate() + pendingOrder.planDuration);
-      console.log(`📅 Expiry Date: ${expiryDate.toISOString().split('T')[0]}`);
-
-      // Create or update user
-      console.log('👤 Creating/Updating user...');
-      let user;
-      if (existingUser) {
-        console.log('♻️ Reactivating existing user...');
-        // Reactivate existing user
-        existingUser.isActive = true;
-        existingUser.expiryDate = expiryDate;
-        existingUser.level = pendingOrder.level;
-        existingUser.name = pendingOrder.name;
-        existingUser.email = pendingOrder.email;
-        existingUser.state = 'READY';
-        existingUser.currentDay = 1;
-        existingUser.lessonCompleted = false;
-        // Reset expiry reminder flags for new subscription period
-        existingUser.sevenDayReminderSent = false;
-        existingUser.threeDayReminderSent = false;
-        user = await existingUser.save();
-        console.log(`✅ User reactivated successfully: ${pendingOrder.phone}`);
-      } else {
-        console.log('🆕 Creating new user...');
-        // Create new user
-        user = new User({
-          name: pendingOrder.name,
-          phone: pendingOrder.phone,
-          email: pendingOrder.email,
-          level: pendingOrder.level,
-          isActive: true,
-          state: 'READY',
-          currentDay: 1,
-          lessonText: '',
-          lessonCompleted: false,
-          expiryDate: expiryDate,
-        });
-        user = await user.save();
-        console.log(`✅ New user created successfully: ${pendingOrder.phone}`);
-      }
-
-      console.log('💾 User saved to database:');
-      console.log(`   User ID: ${user._id}`);
-      console.log(`   Phone: ${user.phone}`);
-      console.log(`   Active: ${user.isActive}`);
-      console.log(`   Expiry: ${user.expiryDate.toISOString().split('T')[0]}`);
-
-      // Save payment history
-      console.log('💳 Saving payment history...');
-      await PaymentHistory.create({
-        userId: user._id,
-        name: pendingOrder.name,
-        phone: pendingOrder.phone,
-        email: pendingOrder.email,
-        level: pendingOrder.level,
-        planDuration: pendingOrder.planDuration,
-        planName: `plan${pendingOrder.planDuration}`,
-        amountPaid: amountPaid / 100, // Convert paise to rupees
-        currency: 'INR',
-        razorpayOrderId: orderId,
-        razorpayPaymentId: paymentId,
-        paymentMethod: payment.method || 'unknown',
-        paymentStatus: 'success',
-        expiryDate: expiryDate,
-        utmSource: pendingOrder.utmSource
-      });
-      console.log('✅ Payment history saved');
-
-      // Send WhatsApp welcome message using approved template
-      console.log('📱 === SENDING WELCOME MESSAGE ===');
-      console.log('   Phone:', pendingOrder.phone);
-      console.log('   Template: payment_welcome_new');
-      const formattedExpiryDate = expiryDate.toISOString().split('T')[0];
+      // Send WhatsApp confirmation (best-effort; user is already activated regardless)
       try {
-        const whatsappResult = await whatsappService.sendTemplateMessage(
-          pendingOrder.phone,
-          'payment_welcome_new',
-          [
-            user.name,                            // {{1}} = User Name (e.g., "Rajesh")
-            pendingOrder.planDuration.toString(), // {{2}} = Plan Duration (e.g., "30")
-            pendingOrder.level,                   // {{3}} = Level (e.g., "beginner")
-            formattedExpiryDate                   // {{4}} = Expiry Date (e.g., "2026-03-24")
-          ],
-          'en_US'
-        );
-        console.log('✅ WhatsApp welcome message sent successfully');
-        console.log('   WhatsApp Message ID:', whatsappResult?.messages?.[0]?.id);
+        if (isNewUser) {
+          const formattedExpiryDate = newExpiryDate.toISOString().split('T')[0];
+          await whatsappService.sendTemplateMessage(
+            pendingOrder.phone,
+            'payment_welcome_new',
+            [user.name, pendingOrder.planDuration.toString(), pendingOrder.level, formattedExpiryDate],
+            'en_US'
+          );
+        } else {
+          const formattedDate = newExpiryDate.toLocaleDateString('en-IN', {
+            day: 'numeric',
+            month: 'long',
+            year: 'numeric'
+          });
+          await whatsappService.sendWhatsAppMessage(
+            pendingOrder.phone,
+            `🎉 Payment successful!\n\nYour plan is now active until ${formattedDate}.${levelChanged ? `\n\nLevel updated to ${pendingOrder.level}. Starting fresh at Day 1!` : ''}\n\nKeep up your streak of ${user.streak} day${user.streak !== 1 ? 's' : ''}! 🔥`
+          );
+        }
       } catch (whatsappError) {
-        console.error('❌ === WHATSAPP SEND FAILED ===');
-        console.error('   Error Message:', whatsappError.message);
-        console.error('   Error Stack:', whatsappError.stack);
-        console.error('   Response Data:', whatsappError.response?.data);
-        // Don't fail webhook if WhatsApp fails - user still activated
+        console.error('❌ WhatsApp confirmation failed (non-fatal):', whatsappError.message);
       }
-      console.log('📱 === WELCOME MESSAGE COMPLETE ===');
-
-      // Update pending order
-      console.log('📝 Updating pending order status to "paid"...');
-      pendingOrder.status = 'paid';
-      await pendingOrder.save();
-      console.log('✅ Pending order updated');
-
-      // Log success
-      console.log('📊 Creating payment success log...');
-      await Log.create({
-        type: 'PAYMENT_SUCCESS',
-        userPhone: pendingOrder.phone,
-        message: `User activated with ${pendingOrder.planDuration}-day plan`,
-        status: 'SUCCESS',
-        metadata: {
-          orderId,
-          paymentId,
-          planDuration: pendingOrder.planDuration,
-          expiryDate: expiryDate,
-        },
-      });
-      console.log('✅ Log entry created');
 
       console.log('🎉 Payment processed successfully!');
       console.log('🔔 ========== WEBHOOK END (SUCCESS) ==========\n');
@@ -560,6 +351,18 @@ exports.getOrderStatus = async (req, res) => {
       success: false,
       message: 'Failed to check order status'
     });
+  }
+};
+
+// Manual reconciliation trigger - releases stuck 'processing' orders for retry
+exports.reconcileStuckOrders = async (req, res) => {
+  try {
+    const maxAgeMinutes = parseInt(req.body?.maxAgeMinutes) || 15;
+    const result = await reconcileStuckPendingOrders(maxAgeMinutes);
+    res.json({ success: true, ...result });
+  } catch (error) {
+    console.error('❌ Reconciliation error:', error);
+    res.status(500).json({ success: false, message: 'Reconciliation failed', error: error.message });
   }
 };
 
@@ -624,13 +427,14 @@ exports.verifyUpgradePayment = async (req, res) => {
     }
     
     console.log('✅ Signature verified');
-    
-    // Find pending order by payment link ID
+
+    // Find pending order by payment link ID (status not filtered here - the
+    // processor's atomic claim is the actual idempotency gate, so a webhook
+    // that already completed this order is detected below, not silently missed)
     const pendingOrder = await PendingOrder.findOne({
-      paymentLinkId: razorpay_payment_link_id,
-      status: 'created'
+      paymentLinkId: razorpay_payment_link_id
     });
-    
+
     if (!pendingOrder) {
       console.error('❌ No pending order found');
       return res.send(`
@@ -642,119 +446,82 @@ exports.verifyUpgradePayment = async (req, res) => {
         </body></html>
       `);
     }
-    
+
     console.log('📦 Found pending order:', pendingOrder._id);
-    
-    // Find user
-    const user = await User.findOne({ phone: pendingOrder.phone });
-    
-    if (!user) {
-      console.error('❌ User not found:', pendingOrder.phone);
+
+    // Try to fetch authoritative payment details (amount + method) from Razorpay.
+    // Best-effort: if unavailable, fall back to trusting the verified callback/signature.
+    let paymentMethod = 'payment_link';
+    let amountPaidPaise = pendingOrder.amountPaise;
+    try {
+      const payment = await razorpay.payments.fetch(razorpay_payment_id);
+      paymentMethod = payment.method || 'payment_link';
+      if (typeof payment.amount === 'number') {
+        amountPaidPaise = payment.amount;
+      }
+      console.log('💳 Payment method:', paymentMethod, '| Amount:', amountPaidPaise);
+    } catch (fetchError) {
+      console.log('⚠️ Could not fetch payment details, trusting callback signature for amount');
+    }
+
+    let result;
+    try {
+      result = await processSuccessfulPayment({
+        pendingOrder,
+        razorpayPaymentId: razorpay_payment_id,
+        paymentMethod,
+        amountPaidPaise
+      });
+    } catch (procErr) {
+      console.error('❌ Upgrade processing error:', procErr);
+      await Log.create({
+        type: 'PAYMENT_ERROR',
+        userPhone: pendingOrder.phone,
+        message: `Upgrade callback processing failed: ${procErr.message}`,
+        status: 'ERROR'
+      });
       return res.send(`
         <!DOCTYPE html>
-        <html><head><meta charset="UTF-8"><title>User Not Found</title></head>
+        <html><head><meta charset="UTF-8"><title>Error</title></head>
         <body style="font-family: Arial; text-align: center; padding: 50px;">
-          <h1 style="color: #dc3545;">❌ User Not Found</h1>
-          <p>Please contact support with payment ID: ${razorpay_payment_id}</p>
+          <h1 style="color: #dc3545;">❌ Error Processing Payment</h1>
+          <p>An error occurred. Please contact support if amount was deducted.</p>
         </body></html>
       `);
     }
-    
-    // Calculate new expiry date
-    const currentExpiry = user.expiryDate && user.expiryDate > new Date() 
-      ? new Date(user.expiryDate) 
-      : new Date();
-    
-    const newExpiryDate = new Date(currentExpiry);
-    newExpiryDate.setDate(newExpiryDate.getDate() + pendingOrder.planDuration);
-    
-    console.log('📅 Subscription update:');
-    console.log('   Current expiry:', currentExpiry.toISOString().split('T')[0]);
-    console.log('   New expiry:', newExpiryDate.toISOString().split('T')[0]);
-    console.log('   Days added:', pendingOrder.planDuration);
-    console.log('   Current level:', user.level);
-    console.log('   New level:', pendingOrder.level);
-    
-    // Check if level is changing (before we update it)
-    const levelChanged = user.level !== pendingOrder.level;
-    const oldLevel = user.level;
-    
-    // Update user subscription
-    user.expiryDate = newExpiryDate;
-    user.isActive = true;
-    user.level = pendingOrder.level; // Update level from pending order
-    
-    // If level changed, reset progress to start fresh at new level
-    if (levelChanged) {
-      const oldDay = user.currentDay;
-      const oldState = user.state;
-      user.currentDay = 1;
-      user.state = 'READY';
-      user.lessonText = '';
-      user.lessonCompleted = false;
-      console.log(`🔄 Level changed: Resetting progress`);
-      console.log(`   Old: Day ${oldDay}, State ${oldState}`);
-      console.log(`   New: Day 1, State READY`);
-      console.log(`   Streak preserved: ${user.streak} days`);
+
+    if (!result.success) {
+      console.error('❌ Amount mismatch on upgrade callback');
+      return res.send(`
+        <!DOCTYPE html>
+        <html><head><meta charset="UTF-8"><title>Verification Failed</title></head>
+        <body style="font-family: Arial; text-align: center; padding: 50px;">
+          <h1 style="color: #dc3545;">❌ Verification Failed</h1>
+          <p>Payment amount could not be verified. Please contact support with payment ID: ${razorpay_payment_id}</p>
+        </body></html>
+      `);
     }
-    
-    // Reset reminder flags
-    user.sevenDayReminderSent = false;
-    user.threeDayReminderSent = false;
-    await user.save();
-    
+
+    if (result.alreadyProcessed) {
+      console.log(`⚠️ Order already processed (status: ${result.status}) - likely completed via webhook`);
+      return res.send(`
+        <!DOCTYPE html>
+        <html><head><meta charset="UTF-8"><title>Payment Confirmed</title></head>
+        <body style="font-family: Arial; text-align: center; padding: 50px;">
+          <h1 style="color: #28a745;">✅ Payment Already Confirmed</h1>
+          <p>Your subscription has already been activated. A confirmation was sent to your WhatsApp.</p>
+        </body></html>
+      `);
+    }
+
+    const { user, newExpiryDate, levelChanged } = result;
+
     if (levelChanged) {
-      console.log(`✅ User level updated from ${oldLevel} to ${pendingOrder.level} - Progress reset to Day 1`);
+      console.log(`✅ User level updated to ${user.level} - Progress reset to Day 1`);
     } else {
       console.log(`✅ User level unchanged: ${user.level} - Progress preserved at Day ${user.currentDay}`);
     }
-    
-    // Update pending order status
-    pendingOrder.status = 'paid';
-    pendingOrder.razorpayPaymentId = razorpay_payment_id;
-    await pendingOrder.save();
-    
-    // Try to fetch payment details for more information
-    let paymentMethod = 'payment_link';
-    try {
-      const razorpay = require('../config/razorpay');
-      const payment = await razorpay.payments.fetch(razorpay_payment_id);
-      paymentMethod = payment.method || 'payment_link';
-      console.log('💳 Payment method:', paymentMethod);
-    } catch (fetchError) {
-      console.log('⚠️ Could not fetch payment details, using default');
-    }
-    
-    console.log('📝 Creating payment history with:', {
-      userId: user._id.toString(),
-      name: pendingOrder.name,
-      phone: pendingOrder.phone,
-      email: pendingOrder.email,
-      level: pendingOrder.level,
-      planDuration: pendingOrder.planDuration,
-      amountPaid: pendingOrder.amountPaise / 100,
-      expiryDate: newExpiryDate
-    });
-    
-    // Create payment history record
-    await PaymentHistory.create({
-      userId: user._id,
-      name: pendingOrder.name,
-      phone: pendingOrder.phone,
-      email: pendingOrder.email,
-      level: pendingOrder.level,
-      planDuration: pendingOrder.planDuration,
-      planName: `plan${pendingOrder.planDuration}`,
-      amountPaid: pendingOrder.amountPaise / 100,
-      currency: 'INR',
-      razorpayOrderId: razorpay_payment_link_id,
-      razorpayPaymentId: razorpay_payment_id,
-      paymentMethod: paymentMethod,
-      paymentStatus: 'success',
-      expiryDate: newExpiryDate
-    });
-    console.log('✅ Payment history record created');
-    
+
     // Create readable level display
     const levelDisplay = pendingOrder.level.charAt(0).toUpperCase() + pendingOrder.level.slice(1);
     const levelCode = pendingOrder.level === 'beginner' ? 'B' : pendingOrder.level === 'intermediate' ? 'I' : 'A';
@@ -782,7 +549,6 @@ exports.verifyUpgradePayment = async (req, res) => {
         amount: pendingOrder.amountPaise / 100,
         level: pendingOrder.level,
         levelChanged: levelChanged,
-        oldLevel: oldLevel,
         progressReset: levelChanged,
         currentDay: user.currentDay,
         newExpiryDate

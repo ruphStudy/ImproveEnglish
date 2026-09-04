@@ -14,4 +14,8 @@ router.get('/order-status/:orderId', paymentController.getOrderStatus);
 // Verify upgrade payment (callback from Razorpay Payment Link)
 router.get('/verify-upgrade', paymentController.verifyUpgradePayment);
 
+// Manual reconciliation - releases orders stuck in 'processing' (e.g. after a crash
+// mid-payment) so the next webhook/callback retry can safely complete them
+router.post('/reconcile-stuck', paymentController.reconcileStuckOrders);
+
 module.exports = router;
