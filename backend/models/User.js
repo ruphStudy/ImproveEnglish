@@ -62,6 +62,23 @@ const userSchema = new mongoose.Schema({
     type: String,
     default: null
   }, // Razorpay payment ID last applied to this user's subscription - guards a crashed/retried payment from double-extending expiry or resetting progress twice
+  learningGoal: {
+    type: String,
+    enum: ['daily_english', 'workplace', 'interview', 'college_placement', 'customer_service', 'sales', 'travel'],
+    default: 'daily_english'
+  }, // Biases lesson scenario/context - never overrides curriculum topic/grammar/day
+  onboardingStatus: {
+    type: String,
+    enum: ['PENDING_GOAL', 'PENDING_ASSESSMENT', 'COMPLETED']
+    // Intentionally no default: existing users read this as undefined, which
+    // every onboarding check treats as "already onboarded" for backward compatibility.
+  },
+  assessedLevel: {
+    type: String,
+    enum: ['beginner', 'intermediate', 'advanced'],
+    default: null
+  }, // Level recommended by the onboarding assessment - informational only.
+     // Never silently overwrites `level`, since PlanMaster prices are level-specific.
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
 });

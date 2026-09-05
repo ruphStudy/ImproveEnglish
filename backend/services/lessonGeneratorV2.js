@@ -1,5 +1,6 @@
 const openai = require('../config/openai');
 const Log = require('../models/Log');
+const { getScenarioFamily, getGoalContextLabel } = require('./onboardingService');
 
 const GENERATION_VERSION = 'v3';
 
@@ -93,6 +94,8 @@ Topic: ${topic.title} | Grammar focus: ${topic.grammarFocus} | Difficulty: ${top
 
 ${getLevelGuidance(user.level)}
 
+Learner's goal context - bias the situation/vocabulary toward this, but KEEP today's topic and grammar focus exactly: ${getGoalContextLabel(user.learningGoal)}
+
 Avoid recent topics (days): ${recentTopics}
 Avoid recent grammar patterns: ${recentGrammar}
 Avoid recent vocabulary: ${recentVocab}
@@ -104,22 +107,14 @@ Generate the lesson JSON now.
 }
 
 // ============================================================================
-// PART 4: SCENARIO TYPE ROTATION (unchanged - deterministic, no memory needed)
+// PART 4: SCENARIO TYPE ROTATION - deterministic, no memory needed. Biased by
+// the learner's goal (falls back to the daily_english family when no goal is
+// set, which is also every existing user's default).
 // ============================================================================
 
-const SCENARIO_TYPES = [
-  'workplace',
-  'social',
-  'shopping',
-  'travel',
-  'dining',
-  'healthcare',
-  'education',
-  'technology'
-];
-
-function getScenarioType(day) {
-  return SCENARIO_TYPES[day % SCENARIO_TYPES.length];
+function getScenarioType(day, learningGoal) {
+  const family = getScenarioFamily(learningGoal);
+  return family[day % family.length];
 }
 
 // ============================================================================
@@ -313,7 +308,7 @@ async function callOpenAI(messages, temperature) {
 }
 
 async function generateLesson(user, topic, tutorMemory) {
-  const scenarioType = getScenarioType(user.currentDay);
+  const scenarioType = getScenarioType(user.currentDay, user.learningGoal);
   const recentVocabWords = (tutorMemory.vocabBank || [])
     .slice(-RECENT_VOCAB_CONTEXT_LIMIT)
     .map(v => v.word);

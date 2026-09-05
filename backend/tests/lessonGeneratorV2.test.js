@@ -210,4 +210,46 @@ describe('getScenarioType', () => {
     expect(day10).not.toBe(day11);
     expect(getScenarioType(10)).toBe(day10); // deterministic given same input
   });
+
+  test('a legacy user with no learningGoal defaults safely to the daily_english scenario family', () => {
+    expect(getScenarioType(10, undefined)).toBe(getScenarioType(10, 'daily_english'));
+  });
+
+  test('different goals bias toward different scenario families', () => {
+    expect(getScenarioType(1, 'workplace')).toBe('email');
+    expect(getScenarioType(1, 'travel')).toBe('hotel');
+    expect(getScenarioType(1, 'workplace')).not.toBe(getScenarioType(1, 'travel'));
+  });
+});
+
+describe('generateLesson - learning goal personalization', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  test('the lesson generator receives learningGoal and includes goal context in the prompt without replacing the curriculum topic/grammar', async () => {
+    openai.chat.completions.create.mockResolvedValueOnce(openaiResponse(validLessonJson()));
+
+    const interviewUser = { ...user, learningGoal: 'interview' };
+    await generateLesson(interviewUser, topic, tutorMemory());
+
+    const [{ messages }] = openai.chat.completions.create.mock.calls[0];
+    const userMessage = messages.find(m => m.role === 'user').content;
+
+    // Goal biases context...
+    expect(userMessage).toContain('job interview preparation');
+    // ...but today's actual curriculum topic/grammar are still authoritative and unchanged
+    expect(userMessage).toContain(topic.title);
+    expect(userMessage).toContain(topic.grammarFocus);
+  });
+
+  test('an existing user with no learningGoal set still generates normally (defaults to daily_english context)', async () => {
+    openai.chat.completions.create.mockResolvedValueOnce(openaiResponse(validLessonJson()));
+
+    const legacyUser = { ...user };
+    delete legacyUser.learningGoal;
+    const result = await generateLesson(legacyUser, topic, tutorMemory());
+
+    expect(result.validationStatus).toBe('valid');
+    const [{ messages }] = openai.chat.completions.create.mock.calls[0];
+    expect(messages.find(m => m.role === 'user').content).toContain('general everyday life');
+  });
 });

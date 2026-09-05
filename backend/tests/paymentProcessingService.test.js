@@ -207,7 +207,10 @@ describe('processSuccessfulPayment - new user', () => {
 
     expect(result.success).toBe(true);
     expect(result.isNewUser).toBe(true);
-    expect(createdUser.state).toBe('READY');
+    // 'NEW' (not 'READY') keeps a brand-new user out of the daily lesson cron
+    // until the onboarding goal-selection + assessment flow completes.
+    expect(createdUser.state).toBe('NEW');
+    expect(createdUser.onboardingStatus).toBe('PENDING_GOAL');
     expect(createdUser.currentDay).toBe(1);
     expect(createdUser.isActive).toBe(true);
     expect(claimed.status).toBe('paid');

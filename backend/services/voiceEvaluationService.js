@@ -2,15 +2,11 @@ const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const OpenAI = require('openai');
+const openai = require('../config/openai');
 const Log = require('../models/Log');
 const Lesson = require('../models/Lesson');
 const TutorMemory = require('../models/TutorMemory');
 const SpeakingAttempt = require('../models/SpeakingAttempt');
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-});
 
 const VOICE_MODEL = 'gpt-4o-mini';
 const SCORE_MIN = 1;

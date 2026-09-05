@@ -282,6 +282,13 @@ exports.handleWebhook = async (req, res) => {
             [user.name, pendingOrder.planDuration.toString(), pendingOrder.level, formattedExpiryDate],
             'en_US'
           );
+
+          // Kick off the short WhatsApp onboarding (goal selection -> level
+          // assessment) for brand-new users only - existing users are untouched.
+          if (user.onboardingStatus === 'PENDING_GOAL') {
+            const { buildGoalSelectionMessage } = require('../services/onboardingService');
+            await whatsappService.sendWhatsAppMessage(pendingOrder.phone, buildGoalSelectionMessage());
+          }
         } else {
           const formattedDate = newExpiryDate.toLocaleDateString('en-IN', {
             day: 'numeric',

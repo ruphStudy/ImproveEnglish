@@ -10,6 +10,7 @@ const Razorpay = require('razorpay');
 const PendingOrder = require('../models/PendingOrder');
 const PlanMaster = require('../models/PlanMaster');
 const { isDuplicateMessage } = require('../utils/whatsappDedupe');
+const { needsOnboarding, handleOnboardingMessage } = require('../services/onboardingService');
 
 // Initialize Razorpay
 const razorpay = new Razorpay({
@@ -70,6 +71,7 @@ exports.handleWebhook = async (req, res, next) => {
       try {
       const phone = msg.from;
       const text = msg.text?.body?.trim().toUpperCase();
+      const rawText = msg.text?.body?.trim(); // original case, for onboarding text answers - `text` above is uppercased for command matching only
       const user = await User.findOne({ phone });
 
       if (!user) {
@@ -79,6 +81,15 @@ exports.handleWebhook = async (req, res, next) => {
 
       console.log(`👤 User found: ${user.name} (${phone}) - State: ${user.state}`);
       await Log.create({ type: 'MESSAGE_RECEIVED', phone, message: text || `[${msg.type || 'UNKNOWN'}]` });
+
+      // Short WhatsApp onboarding (goal selection -> level assessment) for
+      // brand-new users (state 'NEW'). UPGRADE must keep working regardless
+      // of onboarding status, per product rule.
+      if (text !== 'UPGRADE' && needsOnboarding(user)) {
+        const onboardingResult = await handleOnboardingMessage(user, msg, rawText);
+        await sendWhatsAppMessage(phone, onboardingResult.messageText);
+        continue;
+      }
 
       // Handle AUDIO messages - Voice Evaluation
       if (msg.type === 'audio') {

@@ -19,6 +19,10 @@ jest.mock('razorpay', () => jest.fn().mockImplementation(() => ({})));
 jest.mock('../utils/whatsappDedupe', () => ({
   isDuplicateMessage: jest.fn().mockResolvedValue(false)
 }));
+jest.mock('../services/onboardingService', () => ({
+  needsOnboarding: jest.fn().mockReturnValue(false),
+  handleOnboardingMessage: jest.fn()
+}));
 
 const User = require('../models/User');
 const Log = require('../models/Log');
@@ -142,6 +146,66 @@ describe('handleWebhook - audio message sets lastFluencyScore from the truthful 
       expect.anything(),
       expect.anything()
     );
+    expect(res.sendStatus).toHaveBeenCalledWith(200);
+  });
+});
+
+describe('handleWebhook - onboarding gating (state NEW)', () => {
+  const { needsOnboarding, handleOnboardingMessage } = require('../services/onboardingService');
+  const { sendWhatsAppMessage } = require('../services/whatsappService');
+  const CurriculumTopic = require('../models/CurriculumTopic');
+  const PlanMaster = require('../models/PlanMaster');
+
+  const onboardingUser = { _id: 'u2', name: 'Priya', phone: '919000000002', state: 'NEW', onboardingStatus: 'PENDING_GOAL', currentDay: 1, streak: 0 };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    needsOnboarding.mockReturnValue(false);
+  });
+
+  test('START sent too early (mid-onboarding) is routed to onboarding, not the normal on-demand lesson flow', async () => {
+    User.findOne.mockResolvedValue({ ...onboardingUser });
+    needsOnboarding.mockReturnValue(true);
+    handleOnboardingMessage.mockResolvedValue({ messageText: 'Please finish setup first: reply with 1-7.' });
+
+    const req = webhookReqWithMessage({ id: 'wamid.start1', from: onboardingUser.phone, text: { body: 'START' } });
+    const res = mockRes();
+    const next = jest.fn();
+
+    await webhookController.handleWebhook(req, res, next);
+
+    expect(handleOnboardingMessage).toHaveBeenCalledTimes(1);
+    expect(sendWhatsAppMessage).toHaveBeenCalledWith(onboardingUser.phone, 'Please finish setup first: reply with 1-7.');
+    expect(CurriculumTopic.findOne).not.toHaveBeenCalled(); // normal START-in-READY lesson generation never ran
+    expect(res.sendStatus).toHaveBeenCalledWith(200);
+  });
+
+  test('UPGRADE still works even while onboarding is pending', async () => {
+    User.findOne.mockResolvedValue({ ...onboardingUser, isActive: true, level: 'beginner' });
+    needsOnboarding.mockReturnValue(true);
+    PlanMaster.find.mockReturnValue({ sort: jest.fn().mockResolvedValue([{ level: 'bigenner', days: 30, price: 499 }]) });
+
+    const req = webhookReqWithMessage({ id: 'wamid.upgrade1', from: onboardingUser.phone, text: { body: 'UPGRADE' } });
+    const res = mockRes();
+    const next = jest.fn();
+
+    await webhookController.handleWebhook(req, res, next);
+
+    expect(handleOnboardingMessage).not.toHaveBeenCalled();
+    expect(sendWhatsAppMessage).toHaveBeenCalledWith(onboardingUser.phone, expect.stringContaining('Choose your upgrade plan'));
+    expect(res.sendStatus).toHaveBeenCalledWith(200);
+  });
+
+  test('an onboarding-completed user is dispatched normally, unaffected by the onboarding gate', async () => {
+    User.findOne.mockResolvedValue({ ...existingUser }); // state READY, onboardingStatus undefined
+
+    const req = webhookReqWithMessage({ id: 'wamid.sticker2', from: existingUser.phone, type: 'sticker', sticker: { id: 's1' } });
+    const res = mockRes();
+    const next = jest.fn();
+
+    await webhookController.handleWebhook(req, res, next);
+
+    expect(handleOnboardingMessage).not.toHaveBeenCalled();
     expect(res.sendStatus).toHaveBeenCalledWith(200);
   });
 });
