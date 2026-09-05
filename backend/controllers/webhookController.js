@@ -137,8 +137,23 @@ exports.handleWebhook = async (req, res, next) => {
       
       // Handle "START" command when user is in READY state - Generate lesson on-demand
       if (text === 'START' && user.state === 'READY') {
+        // Guard against an expired-but-not-yet-deactivated user (the midnight
+        // subscriptionExpiry cron may not have run yet) triggering a paid
+        // OpenAI generation call for a lapsed subscription.
+        if (!user.isActive || (user.expiryDate && user.expiryDate < new Date())) {
+          if (user.isActive) {
+            user.isActive = false;
+            await user.save();
+          }
+          await sendWhatsAppMessage(
+            phone,
+            `Hi ${user.name}, your FluencyLoop plan has expired. Reply UPGRADE to renew and continue your lessons.`
+          );
+          continue;
+        }
+
         console.log(`🎯 User ${phone} sent START in READY state - Generating lesson on-demand`);
-        
+
         try {
           // Fetch curriculum topic
           const topic = await CurriculumTopic.findOne({

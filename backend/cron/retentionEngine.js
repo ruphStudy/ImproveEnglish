@@ -2,6 +2,7 @@ const cron = require('node-cron');
 const User = require('../models/User');
 const Lesson = require('../models/Lesson');
 const SpeakingAttempt = require('../models/SpeakingAttempt');
+const LearnerEvent = require('../models/LearnerEvent');
 const Log = require('../models/Log');
 const { sendWhatsAppMessage } = require('../services/whatsappService');
 const { runWithCronLock } = require('../utils/cronLock');
@@ -22,6 +23,27 @@ const {
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 const DAY30_REPORT_WINDOW = [25, 32];
+
+/**
+ * Sends a proactive plain-text nudge and, on failure, logs a clearly labeled
+ * "needs an approved template" condition (rather than a generic error) so an
+ * operator can tell this apart from a real bug. Re-throws so the caller's
+ * per-user catch still counts it as an error and - critically - so the
+ * associated milestone is never recorded for a message that was never
+ * actually delivered.
+ */
+async function sendProactiveMessage(phone, message, label) {
+  try {
+    await sendWhatsAppMessage(phone, message);
+  } catch (sendErr) {
+    await Log.create({
+      type: 'ERROR',
+      phone,
+      message: `${label} send failed (likely outside WhatsApp's 24h window - needs an approved template): ${sendErr.message}`
+    });
+    throw sendErr;
+  }
+}
 
 /**
  * Runs once daily. For each active, onboarded, non-expired user, applies (in
@@ -67,13 +89,17 @@ async function runRetentionEngineJobInner() {
         if (paymentInfo) {
           const daysSincePayment = Math.floor((now - new Date(paymentInfo.createdAt)) / ONE_DAY_MS);
 
-          // 1. Day-30 progress report (once per subscription cycle - dedupe by paymentId)
+          // 1. Day-30 progress report (once per subscription cycle - dedupe by paymentId).
+          // Send BEFORE recording: if the send fails (e.g. rejected outside WhatsApp's
+          // 24h window - see file-level note), the milestone must stay unclaimed so
+          // tomorrow's run retries instead of permanently losing the report.
           if (!handled && paymentInfo.planDuration === 30
               && daysSincePayment >= DAY30_REPORT_WINDOW[0] && daysSincePayment <= DAY30_REPORT_WINDOW[1]) {
-            const report = await buildDay30ProgressReport(user);
-            const recorded = await recordLearnerEvent(user._id, 'DAY30_REPORT_SENT', { dedupeKey: paymentInfo.razorpayPaymentId });
-            if (recorded) {
-              await sendWhatsAppMessage(user.phone, report);
+            const alreadySent = await LearnerEvent.exists({ userId: user._id, type: 'DAY30_REPORT_SENT', dedupeKey: paymentInfo.razorpayPaymentId });
+            if (!alreadySent) {
+              const report = await buildDay30ProgressReport(user);
+              await sendProactiveMessage(user.phone, report, 'Day-30 report');
+              await recordLearnerEvent(user._id, 'DAY30_REPORT_SENT', { dedupeKey: paymentInfo.razorpayPaymentId });
               day30Sent++;
               handled = true;
             }
@@ -92,7 +118,7 @@ async function runRetentionEngineJobInner() {
                 ? buildUpgradeNudgeMessage(user, { lessonsCompleted, speakingAttempts })
                 : buildDisengagedNudgeMessage();
 
-              await sendWhatsAppMessage(user.phone, message);
+              await sendProactiveMessage(user.phone, message, `Upgrade nudge (${segment})`);
               await recordLearnerEvent(user._id, 'UPGRADE_NUDGE_SENT', {
                 dedupeKey: `${paymentInfo.razorpayPaymentId}-${now.toISOString().slice(0, 10)}`,
                 metadata: { segment, lessonsCompleted, speakingAttempts }
@@ -108,7 +134,7 @@ async function runRetentionEngineJobInner() {
           const segment = getComebackSegment(user, now);
           if (segment && await canSendComebackReminder(user._id)) {
             const message = buildComebackMessage(segment, user);
-            await sendWhatsAppMessage(user.phone, message);
+            await sendProactiveMessage(user.phone, message, `Comeback reminder (${segment})`);
             await recordLearnerEvent(user._id, 'COMEBACK_REMINDER_SENT', {
               dedupeKey: `${segment}-${now.toISOString().slice(0, 10)}`,
               metadata: { segment }

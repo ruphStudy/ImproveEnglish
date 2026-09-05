@@ -2,6 +2,7 @@ jest.mock('node-cron', () => ({ schedule: jest.fn() }));
 jest.mock('../models/User', () => ({ find: jest.fn() }));
 jest.mock('../models/Lesson', () => ({ countDocuments: jest.fn() }));
 jest.mock('../models/SpeakingAttempt', () => ({ countDocuments: jest.fn() }));
+jest.mock('../models/LearnerEvent', () => ({ exists: jest.fn() }));
 jest.mock('../models/Log', () => ({ create: jest.fn().mockResolvedValue({}) }));
 jest.mock('../services/whatsappService', () => ({ sendWhatsAppMessage: jest.fn().mockResolvedValue({}) }));
 jest.mock('../utils/cronLock', () => ({
@@ -25,6 +26,7 @@ jest.mock('../services/retentionService', () => ({
 const User = require('../models/User');
 const Lesson = require('../models/Lesson');
 const SpeakingAttempt = require('../models/SpeakingAttempt');
+const LearnerEvent = require('../models/LearnerEvent');
 const { sendWhatsAppMessage } = require('../services/whatsappService');
 const {
   recordLearnerEvent,
@@ -56,6 +58,7 @@ beforeEach(() => {
   getLatestPaymentInfoMap.mockResolvedValue(new Map());
   Lesson.countDocuments.mockResolvedValue(0);
   SpeakingAttempt.countDocuments.mockResolvedValue(0);
+  LearnerEvent.exists.mockResolvedValue(null); // Day-30 report not yet sent for this cycle
 });
 
 describe('runRetentionEngineJob - priority ordering (at most one message per user per run)', () => {
@@ -74,16 +77,30 @@ describe('runRetentionEngineJob - priority ordering (at most one message per use
     expect(result.comebackSent).toBe(0);
   });
 
-  test('a Day-30 report already sent for this payment cycle is not sent again (idempotent via recordLearnerEvent)', async () => {
+  test('a Day-30 report already sent for this payment cycle is not sent again', async () => {
     const user = makeUser();
     User.find.mockResolvedValue([user]);
     getLatestPaymentInfoMap.mockResolvedValue(new Map([[String(user._id), { planDuration: 30, razorpayPaymentId: 'pay_1', createdAt: daysAgo(27) }]]));
-    recordLearnerEvent.mockResolvedValueOnce(null); // already recorded
+    LearnerEvent.exists.mockResolvedValue({ _id: 'evt1' }); // already recorded for this payment cycle
 
     const result = await runRetentionEngineJob();
 
     expect(sendWhatsAppMessage).not.toHaveBeenCalled();
+    expect(recordLearnerEvent).not.toHaveBeenCalledWith(user._id, 'DAY30_REPORT_SENT', expect.anything());
     expect(result.day30Sent).toBe(0);
+  });
+
+  test('a Day-30 report send failure (e.g. outside the 24h window) leaves the milestone unclaimed for retry', async () => {
+    const user = makeUser();
+    User.find.mockResolvedValue([user]);
+    getLatestPaymentInfoMap.mockResolvedValue(new Map([[String(user._id), { planDuration: 30, razorpayPaymentId: 'pay_1', createdAt: daysAgo(27) }]]));
+    sendWhatsAppMessage.mockRejectedValueOnce(new Error('outside window'));
+
+    const result = await runRetentionEngineJob();
+
+    expect(recordLearnerEvent).not.toHaveBeenCalledWith(user._id, 'DAY30_REPORT_SENT', expect.anything());
+    expect(result.day30Sent).toBe(0);
+    expect(result.errors).toBe(1);
   });
 });
 
@@ -93,11 +110,8 @@ describe('runRetentionEngineJob - upgrade engine', () => {
   // run. To exercise the upgrade branch in isolation, simulate "this cycle's
   // Day-30 report was already sent" so the code proceeds past it - exactly
   // what happens on the days following the (once-per-cycle) report.
-  function alreadySentDay30(implOverride) {
-    recordLearnerEvent.mockImplementation((userId, type, opts) => {
-      if (type === 'DAY30_REPORT_SENT') return Promise.resolve(null);
-      return implOverride ? implOverride(userId, type, opts) : Promise.resolve({ _id: 'evt1' });
-    });
+  function alreadySentDay30() {
+    LearnerEvent.exists.mockResolvedValue({ _id: 'evt1' }); // Day-30 report already claimed this cycle
   }
 
   test('an engaged user gets the strong upgrade pitch', async () => {
