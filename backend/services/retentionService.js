@@ -27,25 +27,75 @@ async function recordLearnerEvent(userId, type, { dedupeKey = 'default', metadat
 }
 
 /**
- * Cohort/activation anchor: User.createdAt. Every User document in this app
- * is created at the moment of successful payment activation (see
- * paymentProcessingService.js), so this is equivalent to "subscription
- * activation date" for both new and legacy users - no separate lookup needed.
+ * Legacy activation approximation used only by funnel time-to-milestone
+ * calculations (not the retention cohort anchor - see getRetentionAnchor
+ * below). Kept separate deliberately: this sprint's fix is scoped to
+ * retention/DAY_N_ACTIVE only, per the task that introduced it.
  */
 function getActivationDate(user) {
   return user.createdAt;
 }
 
 /**
+ * Business retention cohort anchor, in priority order:
+ *   1. earliest SUBSCRIPTION_ACTIVATED LearnerEvent (the initial paid
+ *      acquisition - renewals/upgrades never create a new one of these,
+ *      so this never resets on renewal/upgrade)
+ *   2. earliest successful PaymentHistory row (covers users whose
+ *      activation event is missing, e.g. predates Prompt 7)
+ *   3. User.createdAt (final legacy fallback, no migration required)
+ *
+ * Bulk variant for many users at once (used by calculateRetentionMetrics);
+ * single-user convenience wrapper below reuses it so there is exactly one
+ * place this priority order is implemented.
+ */
+async function getRetentionAnchorsForUsers(users) {
+  const anchors = new Map(); // userId(string) -> Date
+  const userIds = users.map(u => u._id);
+  if (!userIds.length) return anchors;
+
+  const activationRows = await LearnerEvent.aggregate([
+    { $match: { userId: { $in: userIds }, type: 'SUBSCRIPTION_ACTIVATED' } },
+    { $sort: { occurredAt: 1 } },
+    { $group: { _id: '$userId', occurredAt: { $first: '$occurredAt' } } }
+  ]);
+  activationRows.forEach(r => anchors.set(String(r._id), new Date(r.occurredAt)));
+
+  const missingAfterTier1 = userIds.filter(id => !anchors.has(String(id)));
+  if (missingAfterTier1.length) {
+    const paymentRows = await PaymentHistory.aggregate([
+      { $match: { userId: { $in: missingAfterTier1 }, paymentStatus: 'success' } },
+      { $sort: { createdAt: 1 } },
+      { $group: { _id: '$userId', createdAt: { $first: '$createdAt' } } }
+    ]);
+    paymentRows.forEach(r => anchors.set(String(r._id), new Date(r.createdAt)));
+  }
+
+  users.forEach(u => {
+    if (!anchors.has(String(u._id)) && u.createdAt) {
+      anchors.set(String(u._id), new Date(u.createdAt));
+    }
+  });
+
+  return anchors;
+}
+
+async function getRetentionAnchor(userId, user) {
+  const anchors = await getRetentionAnchorsForUsers([{ _id: userId, createdAt: user && user.createdAt }]);
+  return anchors.get(String(userId)) || null;
+}
+
+/**
  * Records DAY_N_ACTIVE the first time real learner activity (lesson
  * completion or a speaking attempt - never background cron delivery) occurs
- * on or after day N. Safe to call on every activity: already-recorded days
- * are silently skipped by the unique index.
+ * on or after day N, measured from the same getRetentionAnchor used by the
+ * retention analytics endpoint. Safe to call on every activity: already-
+ * recorded days are silently skipped by the unique index.
  */
 async function recordDayActiveMilestones(user, now = new Date()) {
-  const activatedAt = getActivationDate(user);
+  const activatedAt = await getRetentionAnchor(user._id, user);
   if (!activatedAt) return;
-  const daysSinceActivation = Math.floor((now - new Date(activatedAt)) / ONE_DAY_MS);
+  const daysSinceActivation = Math.floor((now - activatedAt) / ONE_DAY_MS);
   for (const day of DAY_MILESTONES) {
     if (daysSinceActivation >= day) {
       await recordLearnerEvent(user._id, `DAY_${day}_ACTIVE`, { dedupeKey: `day-${day}` });
@@ -195,17 +245,25 @@ async function calculateFunnelMetrics(filters = {}) {
 // ============================================================================
 
 async function calculateRetentionMetrics(filters = {}) {
+  // from/to/level/learningGoal/planDuration cohort filters still apply as
+  // before; the "old enough to have reached day N" check below uses the true
+  // retention anchor (SUBSCRIPTION_ACTIVATED -> earliest payment -> createdAt)
+  // instead of raw User.createdAt.
   const baseMatch = await buildUserMatch(filters);
+  const candidates = await User.find(baseMatch).select('_id createdAt').lean();
+  const anchorMap = await getRetentionAnchorsForUsers(candidates);
+
   const results = {};
+  const now = Date.now();
 
   for (const days of RETENTION_DAYS) {
-    const cutoff = new Date(Date.now() - days * ONE_DAY_MS);
-    const existingLte = baseMatch.createdAt && baseMatch.createdAt.$lte;
-    const effectiveLte = existingLte && new Date(existingLte) < cutoff ? existingLte : cutoff;
-
-    const match = { ...baseMatch, createdAt: { ...(baseMatch.createdAt || {}), $lte: effectiveLte } };
-    const cohort = await User.find(match).select('_id').lean();
-    const cohortIds = cohort.map(u => u._id);
+    const cutoff = now - days * ONE_DAY_MS;
+    const cohortIds = candidates
+      .filter(u => {
+        const anchor = anchorMap.get(String(u._id));
+        return anchor && anchor.getTime() <= cutoff;
+      })
+      .map(u => u._id);
 
     const retainedCount = cohortIds.length
       ? await LearnerEvent.countDocuments({ userId: { $in: cohortIds }, type: `DAY_${days}_ACTIVE` })
@@ -523,6 +581,8 @@ module.exports = {
   recordLearnerEvent,
   recordDayActiveMilestones,
   getActivationDate,
+  getRetentionAnchor,
+  getRetentionAnchorsForUsers,
   buildUserMatch,
   getUserIdsForPlanDuration,
   getLatestPaymentInfoMap,

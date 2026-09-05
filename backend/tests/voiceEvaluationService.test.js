@@ -16,6 +16,10 @@ jest.mock('../models/Log', () => ({ create: jest.fn().mockResolvedValue({}) }));
 jest.mock('../models/Lesson', () => ({ findOne: jest.fn() }));
 jest.mock('../models/TutorMemory', () => ({ findOne: jest.fn() }));
 jest.mock('../models/SpeakingAttempt', () => ({ find: jest.fn(), create: jest.fn() }));
+jest.mock('../services/retentionService', () => ({
+  recordLearnerEvent: jest.fn().mockResolvedValue({ _id: 'evt1' }),
+  recordDayActiveMilestones: jest.fn().mockResolvedValue(undefined)
+}));
 
 const fs = require('fs');
 const axios = require('axios');

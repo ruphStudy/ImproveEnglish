@@ -3,7 +3,7 @@ jest.mock('../models/Lesson', () => ({ countDocuments: jest.fn() }));
 jest.mock('../models/SpeakingAttempt', () => ({ find: jest.fn(), countDocuments: jest.fn(), distinct: jest.fn(), aggregate: jest.fn() }));
 jest.mock('../models/TutorMemory', () => ({ findOne: jest.fn() }));
 jest.mock('../models/PaymentHistory', () => ({ aggregate: jest.fn() }));
-jest.mock('../models/LearnerEvent', () => ({ create: jest.fn(), countDocuments: jest.fn(), findOne: jest.fn(), find: jest.fn() }));
+jest.mock('../models/LearnerEvent', () => ({ create: jest.fn(), countDocuments: jest.fn(), findOne: jest.fn(), find: jest.fn(), aggregate: jest.fn() }));
 jest.mock('../config/openai', () => ({ chat: { completions: { create: jest.fn() } } }));
 jest.mock('../models/Log', () => ({ create: jest.fn().mockResolvedValue({}) }));
 
@@ -17,6 +17,8 @@ const LearnerEvent = require('../models/LearnerEvent');
 const {
   recordLearnerEvent,
   recordDayActiveMilestones,
+  getRetentionAnchor,
+  getRetentionAnchorsForUsers,
   calculateFunnelMetrics,
   calculateRetentionMetrics,
   getWeeklyActivityStats,
@@ -75,43 +77,141 @@ describe('recordLearnerEvent - idempotency', () => {
   });
 });
 
+describe('getRetentionAnchor / getRetentionAnchorsForUsers - anchor priority', () => {
+  test('an activation event takes precedence over User.createdAt', async () => {
+    const activationDate = daysAgo(40);
+    LearnerEvent.aggregate.mockResolvedValue([{ _id: 'u1', occurredAt: activationDate }]);
+
+    const anchor = await getRetentionAnchor('u1', { createdAt: daysAgo(1) }); // account "created" much later/earlier than activation
+
+    expect(anchor.getTime()).toBe(new Date(activationDate).getTime());
+    expect(PaymentHistory.aggregate).not.toHaveBeenCalled(); // tier 1 satisfied - no fallback lookup needed
+  });
+
+  test('the earliest activation event is used when duplicates/legacy anomalies exist', async () => {
+    // $sort + $group($first) in the real aggregation already guarantees this;
+    // this test locks in that the mocked earliest row is what gets used.
+    const earliest = daysAgo(50);
+    LearnerEvent.aggregate.mockResolvedValue([{ _id: 'u1', occurredAt: earliest }]);
+
+    const anchor = await getRetentionAnchor('u1', { createdAt: daysAgo(5) });
+
+    expect(anchor.getTime()).toBe(new Date(earliest).getTime());
+  });
+
+  test('falls back to the earliest successful payment when no activation event exists', async () => {
+    LearnerEvent.aggregate.mockResolvedValue([]); // no SUBSCRIPTION_ACTIVATED event
+    const paymentDate = daysAgo(35);
+    PaymentHistory.aggregate.mockResolvedValue([{ _id: 'u1', createdAt: paymentDate }]);
+
+    const anchor = await getRetentionAnchor('u1', { createdAt: daysAgo(1) });
+
+    expect(anchor.getTime()).toBe(new Date(paymentDate).getTime());
+  });
+
+  test('falls back to User.createdAt for a genuinely old legacy user with no event and no payment history', async () => {
+    LearnerEvent.aggregate.mockResolvedValue([]);
+    PaymentHistory.aggregate.mockResolvedValue([]);
+    const legacyCreatedAt = daysAgo(200);
+
+    const anchor = await getRetentionAnchor('u1', { createdAt: legacyCreatedAt });
+
+    expect(anchor.getTime()).toBe(new Date(legacyCreatedAt).getTime());
+  });
+
+  test('a renewal event does not affect the anchor (only SUBSCRIPTION_ACTIVATED is consulted)', async () => {
+    const activationDate = daysAgo(90);
+    // The aggregate is filtered to type: 'SUBSCRIPTION_ACTIVATED' in the real
+    // query, so a later SUBSCRIPTION_RENEWED simply never appears here.
+    LearnerEvent.aggregate.mockResolvedValue([{ _id: 'u1', occurredAt: activationDate }]);
+
+    const anchor = await getRetentionAnchor('u1', { createdAt: daysAgo(90) });
+
+    expect(anchor.getTime()).toBe(new Date(activationDate).getTime());
+    const matchArg = LearnerEvent.aggregate.mock.calls[0][0][0].$match;
+    expect(matchArg.type).toBe('SUBSCRIPTION_ACTIVATED');
+  });
+
+  test('an upgrade event does not affect the anchor either', async () => {
+    const activationDate = daysAgo(90);
+    LearnerEvent.aggregate.mockResolvedValue([{ _id: 'u1', occurredAt: activationDate }]);
+
+    const anchor = await getRetentionAnchor('u1', { createdAt: daysAgo(90) });
+
+    expect(anchor.getTime()).toBe(new Date(activationDate).getTime());
+  });
+});
+
 describe('recordDayActiveMilestones', () => {
-  test('records every day milestone reached so far (duplicate inserts safely no-op via the unique index)', async () => {
+  test('uses the retention anchor helper (activation event), not raw createdAt, to decide which days are reached', async () => {
+    LearnerEvent.aggregate.mockResolvedValue([{ _id: 'u1', occurredAt: daysAgo(10) }]); // activated 10 days ago
     LearnerEvent.create.mockResolvedValue({});
-    const user = { _id: 'u1', createdAt: daysAgo(10) }; // past day 1,3,7 but not 14,30
+    const user = { _id: 'u1', createdAt: daysAgo(1) }; // account record only 1 day old - would wrongly show 0 days if createdAt were used
+
     await recordDayActiveMilestones(user);
+
     const recordedTypes = LearnerEvent.create.mock.calls.map(c => c[0].type);
     expect(recordedTypes).toEqual(expect.arrayContaining(['DAY_1_ACTIVE', 'DAY_3_ACTIVE', 'DAY_7_ACTIVE']));
     expect(recordedTypes).not.toContain('DAY_14_ACTIVE');
-    expect(recordedTypes).not.toContain('DAY_30_ACTIVE');
   });
 
-  test('does nothing (no crash) when createdAt is missing', async () => {
-    await recordDayActiveMilestones({ _id: 'u1' });
+  test('falls back through the same priority chain when no activation event exists', async () => {
+    LearnerEvent.aggregate.mockResolvedValue([]);
+    PaymentHistory.aggregate.mockResolvedValue([]);
+    LearnerEvent.create.mockResolvedValue({});
+    const user = { _id: 'u1', createdAt: daysAgo(10) };
+
+    await recordDayActiveMilestones(user);
+
+    const recordedTypes = LearnerEvent.create.mock.calls.map(c => c[0].type);
+    expect(recordedTypes).toEqual(expect.arrayContaining(['DAY_1_ACTIVE', 'DAY_3_ACTIVE', 'DAY_7_ACTIVE']));
+  });
+
+  test('does nothing (no crash) when no anchor can be resolved at all', async () => {
+    LearnerEvent.aggregate.mockResolvedValue([]);
+    PaymentHistory.aggregate.mockResolvedValue([]);
+    await recordDayActiveMilestones({ _id: 'u1' }); // no createdAt either
     expect(LearnerEvent.create).not.toHaveBeenCalled();
   });
 });
 
 // ============================================================================
-// Retention metrics - correct denominator/numerator
+// Retention metrics - correct denominator/numerator, anchor-based
 // ============================================================================
 
 describe('calculateRetentionMetrics', () => {
-  test('D7 cohort excludes users who subscribed too recently to have reached day 7', async () => {
-    User.find.mockReturnValue({ select: () => ({ lean: () => Promise.resolve([{ _id: 'old1' }]) }) });
+  test('D7 endpoint denominator uses the same anchor helper as recordDayActiveMilestones', async () => {
+    // Account created only 2 days ago, but genuinely activated (per the
+    // SUBSCRIPTION_ACTIVATED event) 10 days ago - must count in the D7 cohort.
+    User.find.mockReturnValue({ select: () => ({ lean: () => Promise.resolve([{ _id: 'u1', createdAt: daysAgo(2) }]) }) });
+    LearnerEvent.aggregate.mockResolvedValue([{ _id: 'u1', occurredAt: daysAgo(10) }]);
     LearnerEvent.countDocuments.mockResolvedValue(1);
 
     const result = await calculateRetentionMetrics({});
 
-    // The match passed to User.find for D7 must exclude users created within the last 7 days
-    const matchArg = User.find.mock.calls.find((c, i) => true); // just verify shape below via cohortSize path
     expect(result.D7.cohortSize).toBe(1);
     expect(result.D7.retainedCount).toBe(1);
     expect(result.D7.retentionRate).toBe(100);
   });
 
+  test('D30 cohort excludes a user whose true activation was too recent, even if User.createdAt is old', async () => {
+    // Inverse case: createdAt looks old, but real activation was recent -
+    // must NOT count in the D30 cohort.
+    User.find.mockReturnValue({ select: () => ({ lean: () => Promise.resolve([{ _id: 'u1', createdAt: daysAgo(200) }]) }) });
+    LearnerEvent.aggregate.mockResolvedValue([{ _id: 'u1', occurredAt: daysAgo(5) }]);
+
+    const result = await calculateRetentionMetrics({});
+
+    expect(result.D30.cohortSize).toBe(0);
+    expect(result.D30.retentionRate).toBe(0);
+  });
+
   test('an inactive user (no DAY_7_ACTIVE event) is not counted as retained', async () => {
-    User.find.mockReturnValue({ select: () => ({ lean: () => Promise.resolve([{ _id: 'a' }, { _id: 'b' }]) }) });
+    User.find.mockReturnValue({ select: () => ({ lean: () => Promise.resolve([{ _id: 'a', createdAt: daysAgo(60) }, { _id: 'b', createdAt: daysAgo(60) }]) }) });
+    LearnerEvent.aggregate.mockResolvedValue([
+      { _id: 'a', occurredAt: daysAgo(60) },
+      { _id: 'b', occurredAt: daysAgo(60) }
+    ]);
     LearnerEvent.countDocuments.mockResolvedValue(0); // neither has the milestone
 
     const result = await calculateRetentionMetrics({});
@@ -132,14 +232,23 @@ describe('calculateRetentionMetrics', () => {
   });
 
   test('background cron delivery alone (no DAY_N_ACTIVE event) never counts as retained - only real activity does', async () => {
-    // DAY_N_ACTIVE is only ever recorded from lesson-completion/voice-attempt code
-    // paths (see recordDayActiveMilestones callers) - this test documents that
-    // retention counting has no other source of truth.
-    User.find.mockReturnValue({ select: () => ({ lean: () => Promise.resolve([{ _id: 'u1' }]) }) });
+    User.find.mockReturnValue({ select: () => ({ lean: () => Promise.resolve([{ _id: 'u1', createdAt: daysAgo(60) }]) }) });
+    LearnerEvent.aggregate.mockResolvedValue([{ _id: 'u1', occurredAt: daysAgo(60) }]);
     LearnerEvent.countDocuments.mockResolvedValue(0);
 
     const result = await calculateRetentionMetrics({});
     expect(result.D3.retainedCount).toBe(0);
+  });
+
+  test('a legacy user with no activation event falls back to earliest payment for cohort eligibility', async () => {
+    User.find.mockReturnValue({ select: () => ({ lean: () => Promise.resolve([{ _id: 'u1', createdAt: daysAgo(1) }]) }) });
+    LearnerEvent.aggregate.mockResolvedValue([]); // no activation event
+    PaymentHistory.aggregate.mockResolvedValue([{ _id: 'u1', createdAt: daysAgo(10) }]);
+    LearnerEvent.countDocuments.mockResolvedValue(1);
+
+    const result = await calculateRetentionMetrics({});
+
+    expect(result.D7.cohortSize).toBe(1); // eligible via payment date, not the 1-day-old createdAt
   });
 });
 
