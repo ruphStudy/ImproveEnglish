@@ -272,6 +272,19 @@ exports.handleWebhook = async (req, res) => {
       console.log(`   New Expiry: ${newExpiryDate.toISOString().split('T')[0]}`);
       console.log(`   Streak Preserved: ${user.streak}`);
 
+      // Milestone tracking - idempotent via LearnerEvent's unique index, so this
+      // is safe even though it runs on the same already-idempotent success path
+      // as the rest of processSuccessfulPayment's effects (Prompt 2 untouched).
+      const { recordLearnerEvent } = require('../services/retentionService');
+      if (isNewUser) {
+        await recordLearnerEvent(user._id, 'SUBSCRIPTION_ACTIVATED', { metadata: { planDuration: pendingOrder.planDuration, level: pendingOrder.level } });
+      } else {
+        await recordLearnerEvent(user._id, levelChanged ? 'SUBSCRIPTION_UPGRADED' : 'SUBSCRIPTION_RENEWED', {
+          dedupeKey: paymentId,
+          metadata: { planDuration: pendingOrder.planDuration, level: pendingOrder.level }
+        });
+      }
+
       // Send WhatsApp confirmation (best-effort; user is already activated regardless)
       try {
         if (isNewUser) {
@@ -528,6 +541,12 @@ exports.verifyUpgradePayment = async (req, res) => {
     } else {
       console.log(`✅ User level unchanged: ${user.level} - Progress preserved at Day ${user.currentDay}`);
     }
+
+    const { recordLearnerEvent } = require('../services/retentionService');
+    await recordLearnerEvent(user._id, levelChanged ? 'SUBSCRIPTION_UPGRADED' : 'SUBSCRIPTION_RENEWED', {
+      dedupeKey: razorpay_payment_id,
+      metadata: { planDuration: pendingOrder.planDuration, level: pendingOrder.level }
+    });
 
     // Create readable level display
     const levelDisplay = pendingOrder.level.charAt(0).toUpperCase() + pendingOrder.level.slice(1);

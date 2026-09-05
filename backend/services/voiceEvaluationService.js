@@ -459,6 +459,12 @@ async function processVoiceEvaluation(mediaId, user) {
       await tutorMemory.save();
     }
 
+    // Lazy require: retentionService -> assessmentService -> this module, so a
+    // top-level require here would create a circular dependency at load time.
+    const { recordLearnerEvent, recordDayActiveMilestones } = require('./retentionService');
+    await recordLearnerEvent(user._id, 'FIRST_VOICE_ATTEMPT');
+    await recordDayActiveMilestones(user);
+
     await Log.create({
       type: 'VOICE_ATTEMPT_EVALUATED',
       userPhone: user.phone,

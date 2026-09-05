@@ -52,6 +52,10 @@ const logSchema = new mongoose.Schema({
       'CRON_LOCK_SKIP',
       'WEBHOOK_MESSAGE_ERROR',
       'QUEUE_JOB_FAILED',
+      'CRON_RETENTION_ENGINE',
+      'DAY30_REPORT_SENT',
+      'COMEBACK_REMINDER_SENT',
+      'UPGRADE_NUDGE_SENT',
       'ERROR'
     ],
     required: true

@@ -82,3 +82,4 @@ require('./cron/expiryReminder');
 require('./cron/streakReset');
 require('./cron/weeklySummary');
 require('./cron/lessonReminder');
+require('./cron/retentionEngine');

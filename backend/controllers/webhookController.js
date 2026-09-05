@@ -231,11 +231,15 @@ exports.handleWebhook = async (req, res, next) => {
           user.eveningReminderSent = false;
           await user.save();
 
-          await Log.create({ 
-            type: 'LESSON_STARTED', 
-            phone, 
-            message: `On-demand lesson generated and sent for day ${user.currentDay - 1}` 
+          await Log.create({
+            type: 'LESSON_STARTED',
+            phone,
+            message: `On-demand lesson generated and sent for day ${user.currentDay - 1}`
           });
+
+          const { recordLearnerEvent } = require('../services/retentionService');
+          await recordLearnerEvent(user._id, 'FIRST_START');
+          await recordLearnerEvent(user._id, 'FIRST_LESSON_SENT');
 
           console.log(`✅ On-demand lesson sent to ${user.name} - Day ${user.currentDay - 1}`);
           
@@ -309,15 +313,19 @@ exports.handleWebhook = async (req, res, next) => {
         console.log(`   Day incremented: ${user.currentDay - 1} → ${user.currentDay}`);
         console.log(`   Reminder flags reset: noonReminderSent=false, eveningReminderSent=false`);
         
-        await Log.create({ 
-          type: 'LESSON_STARTED', 
-          phone, 
+        await Log.create({
+          type: 'LESSON_STARTED',
+          phone,
           message: `User received day ${user.currentDay - 1} lesson, now on day ${user.currentDay}`,
           metadata: {
             lessonId: lesson._id.toString()
           }
         });
-        
+
+        const { recordLearnerEvent } = require('../services/retentionService');
+        await recordLearnerEvent(user._id, 'FIRST_START');
+        await recordLearnerEvent(user._id, 'FIRST_LESSON_SENT');
+
         console.log(`✅ Lesson sent! Day: ${user.currentDay - 1} → ${user.currentDay}, State: READY`);
       } 
       // Handle "DONE" command - User confirms completion
@@ -347,7 +355,13 @@ exports.handleWebhook = async (req, res, next) => {
           user.streak += 1;
           streakIncremented = true;
           console.log(`🔥 Lesson completed! Streak: ${user.streak - 1} → ${user.streak}`);
-          
+
+          // Real learner activity (not background cron delivery) - the basis
+          // for both the FIRST_LESSON_COMPLETED milestone and D1/3/7/14/30 retention.
+          const { recordLearnerEvent, recordDayActiveMilestones } = require('../services/retentionService');
+          await recordLearnerEvent(user._id, 'FIRST_LESSON_COMPLETED');
+          await recordDayActiveMilestones(user);
+
         } else {
           // No new lesson to complete (already completed or not found)
           console.log(`ℹ️ No pending lesson found to mark as completed. Streak unchanged: ${user.streak}`);

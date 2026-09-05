@@ -10,6 +10,7 @@ const Log = require('../models/Log');
 const { runExpiryReminderJob } = require('../cron/expiryReminder');
 const { runStreakResetJob } = require('../cron/streakReset');
 const { runWeeklySummaryJob } = require('../cron/weeklySummary');
+const { runRetentionEngineJob } = require('../cron/retentionEngine');
 const { lessonQueue } = require('../config/queueConfig');
 const adminAuth = require('../middleware/adminAuth');
 
@@ -219,6 +220,32 @@ router.post('/trigger-weekly-summary', async (req, res) => {
   } catch (err) {
     console.error('❌ Manual weekly summary trigger error:', err);
     await Log.create({ type: 'ERROR', message: `Manual weekly summary trigger error: ${err.message}` });
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * Manual Retention Engine Trigger - For Testing
+ * POST /api/cron/trigger-retention-engine
+ * Manually runs Day-30 reports / 30->90 upgrade nudges / comeback reminders
+ */
+router.post('/trigger-retention-engine', async (req, res) => {
+  try {
+    console.log('🔁 Manual retention engine trigger started...');
+
+    const result = await runRetentionEngineJob();
+
+    console.log('✅ Manual retention engine trigger completed!');
+
+    res.json({
+      success: true,
+      message: 'Retention engine triggered successfully',
+      ...result
+    });
+
+  } catch (err) {
+    console.error('❌ Manual retention engine trigger error:', err);
+    await Log.create({ type: 'ERROR', message: `Manual retention engine trigger error: ${err.message}` });
     res.status(500).json({ success: false, error: err.message });
   }
 });

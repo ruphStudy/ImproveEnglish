@@ -1,6 +1,45 @@
 const User = require('../models/User');
 const PaymentHistory = require('../models/PaymentHistory');
 const Log = require('../models/Log');
+const {
+  calculateFunnelMetrics,
+  calculateRetentionMetrics,
+  calculateEngagementMetrics,
+  calculateSubscriptionSignals
+} = require('../services/retentionService');
+
+const VALID_LEVELS = ['beginner', 'intermediate', 'advanced'];
+const VALID_GOALS = ['daily_english', 'workplace', 'interview', 'college_placement', 'customer_service', 'sales', 'travel'];
+
+/** Shared cohort-filter parsing/validation for the funnel/retention/engagement/subscriptions endpoints. */
+function parseAnalyticsFilters(query) {
+  const filters = {};
+  const errors = [];
+
+  if (query.from) {
+    const d = new Date(query.from);
+    if (Number.isNaN(d.getTime())) errors.push('Invalid "from" date'); else filters.from = d;
+  }
+  if (query.to) {
+    const d = new Date(query.to);
+    if (Number.isNaN(d.getTime())) errors.push('Invalid "to" date'); else filters.to = d;
+  }
+  if (query.level) {
+    if (!VALID_LEVELS.includes(query.level)) errors.push(`Invalid "level" - must be one of ${VALID_LEVELS.join(', ')}`);
+    else filters.level = query.level;
+  }
+  if (query.learningGoal) {
+    if (!VALID_GOALS.includes(query.learningGoal)) errors.push(`Invalid "learningGoal" - must be one of ${VALID_GOALS.join(', ')}`);
+    else filters.learningGoal = query.learningGoal;
+  }
+  if (query.planDuration) {
+    const n = parseInt(query.planDuration, 10);
+    if (Number.isNaN(n) || n <= 0) errors.push('Invalid "planDuration" - must be a positive number');
+    else filters.planDuration = n;
+  }
+
+  return { filters, errors };
+}
 
 /**
  * Get Revenue Analytics
@@ -225,6 +264,80 @@ exports.getUserActivityAnalytics = async (req, res, next) => {
 
   } catch (error) {
     console.error('❌ Error fetching activity analytics:', error);
+    next(error);
+  }
+};
+
+/**
+ * Funnel/activation analytics: onboarding completion, first-START/lesson/DONE/
+ * voice rates, and median/average time-to-milestone. All computed locally from
+ * stored LearnerEvent timestamps - no AI calls.
+ * GET /api/analytics/funnel?from&to&level&learningGoal&planDuration
+ */
+exports.getFunnelAnalytics = async (req, res, next) => {
+  try {
+    const { filters, errors } = parseAnalyticsFilters(req.query);
+    if (errors.length) return res.status(400).json({ success: false, errors });
+
+    const data = await calculateFunnelMetrics(filters);
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('❌ Error fetching funnel analytics:', error);
+    next(error);
+  }
+};
+
+/**
+ * D1/D3/D7/D14/D30 retention: cohort size (users old enough to have reached
+ * that day), retained count (real DAY_N_ACTIVE activity), and rate.
+ * GET /api/analytics/retention?from&to&level&learningGoal&planDuration
+ */
+exports.getRetentionAnalytics = async (req, res, next) => {
+  try {
+    const { filters, errors } = parseAnalyticsFilters(req.query);
+    if (errors.length) return res.status(400).json({ success: false, errors });
+
+    const data = await calculateRetentionMetrics(filters);
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('❌ Error fetching retention analytics:', error);
+    next(error);
+  }
+};
+
+/**
+ * Engagement analytics: lesson/speaking-practice volume and averages, streak
+ * distribution, onboarding rate, goal/level distribution, assessed-level mismatch.
+ * GET /api/analytics/engagement?from&to&level&learningGoal&planDuration
+ */
+exports.getEngagementAnalytics = async (req, res, next) => {
+  try {
+    const { filters, errors } = parseAnalyticsFilters(req.query);
+    if (errors.length) return res.status(400).json({ success: false, errors });
+
+    const data = await calculateEngagementMetrics(filters);
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('❌ Error fetching engagement analytics:', error);
+    next(error);
+  }
+};
+
+/**
+ * Subscription signals: active / expiring-soon / expired counts, renewed/
+ * upgraded milestone counts, and plan-duration distribution (derived from
+ * PaymentHistory, not a stored field).
+ * GET /api/analytics/subscriptions?from&to&level&learningGoal&planDuration
+ */
+exports.getSubscriptionAnalytics = async (req, res, next) => {
+  try {
+    const { filters, errors } = parseAnalyticsFilters(req.query);
+    if (errors.length) return res.status(400).json({ success: false, errors });
+
+    const data = await calculateSubscriptionSignals(filters);
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('❌ Error fetching subscription analytics:', error);
     next(error);
   }
 };

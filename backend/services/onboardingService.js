@@ -180,6 +180,11 @@ async function finalizeAssessment(user, assessment) {
     }
   });
 
+  const { recordLearnerEvent } = require('./retentionService');
+  await recordLearnerEvent(user._id, 'ONBOARDING_COMPLETED', {
+    metadata: { goal: user.learningGoal, recommendedLevel: evaluation.recommendedLevel }
+  });
+
   return {
     messageText: buildOnboardingCompletionMessage({
       learningGoal: user.learningGoal,
