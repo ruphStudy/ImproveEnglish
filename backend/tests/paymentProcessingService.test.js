@@ -207,13 +207,19 @@ describe('processSuccessfulPayment - new user', () => {
 
     expect(result.success).toBe(true);
     expect(result.isNewUser).toBe(true);
-    // 'NEW' (not 'READY') keeps a brand-new user out of the daily lesson cron
-    // until the onboarding goal-selection + assessment flow completes.
-    expect(createdUser.state).toBe('NEW');
-    expect(createdUser.onboardingStatus).toBe('PENDING_GOAL');
+    // Activated directly - no mandatory goal selection / assessment.
+    expect(createdUser.state).toBe('READY');
+    expect(createdUser.onboardingStatus).toBeUndefined(); // needsOnboarding() is false (requires state NEW)
     expect(createdUser.currentDay).toBe(1);
     expect(createdUser.isActive).toBe(true);
+    expect(createdUser.level).toBe('beginner');
+    expect(createdUser.lastAppliedPaymentId).toBe('pay_new');
     expect(claimed.status).toBe('paid');
+
+    // Matches the daily lesson cron filter (cron/dailyLesson.js):
+    // isActive, state READY, expiryDate in the future.
+    expect(createdUser.expiryDate).toBeInstanceOf(Date);
+    expect(createdUser.expiryDate.getTime()).toBeGreaterThan(Date.now());
   });
 });
 

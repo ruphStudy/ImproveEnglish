@@ -82,11 +82,10 @@ async function processSuccessfulPayment({ pendingOrder, razorpayPaymentId, payme
           email: claimed.email,
           level: claimed.level,
           isActive: true,
-          // 'NEW' (not 'READY') keeps this user invisible to the daily lesson
-          // cron/queue (both query state:'READY') until onboarding finishes -
-          // no cron/queue code needs to change for this.
-          state: 'NEW',
-          onboardingStatus: 'PENDING_GOAL',
+          // 'READY' so a paid user gets the next 7 AM daily lesson without any
+          // onboarding step. onboardingStatus is left unset, which every
+          // onboarding/retention check treats as "already onboarded".
+          state: 'READY',
           currentDay: 1,
           lessonText: '',
           lessonCompleted: false,
