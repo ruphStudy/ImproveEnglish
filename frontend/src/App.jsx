@@ -9,6 +9,7 @@ import Analytics from './pages/Analytics';
 import PrivacyPolicy from './pages/PrivacyPolicy';
 import Terms from './pages/Terms';
 import Contact from './pages/Contact';
+import DataDeletion from './pages/DataDeletion';
 import AdminSecretGate from './components/AdminSecretGate';
 
 export default function App() {
@@ -20,6 +21,7 @@ export default function App() {
         <Route path="/privacy-policy" element={<PrivacyPolicy />} />
         <Route path="/terms" element={<Terms />} />
         <Route path="/contact" element={<Contact />} />
+        <Route path="/data-deletion" element={<DataDeletion />} />
         
         {/* Admin routes with navigation - gated behind the admin secret, since
             Prompt 3 protects /api/users, /api/logs, /api/analytics/*, etc. */}

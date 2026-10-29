@@ -8,7 +8,7 @@ export default function Contact() {
       <header className="bg-white shadow-sm">
         <div className="max-w-4xl mx-auto px-4 py-6">
           <a href="/buy" className="text-2xl font-bold text-indigo-600">
-            Fluency Loops
+            Fluency Loop English
           </a>
         </div>
       </header>
@@ -48,7 +48,7 @@ export default function Contact() {
                 </div>
                 <div className="ml-4">
                   <p className="text-sm font-medium text-gray-500">Product</p>
-                  <p className="mt-1 text-lg text-gray-900 font-semibold">Fluency Loops</p>
+                  <p className="mt-1 text-lg text-gray-900 font-semibold">Fluency Loop English</p>
                   <p className="text-sm text-gray-600 mt-1">AI-Powered English Learning via WhatsApp</p>
                 </div>
               </div>
@@ -63,10 +63,10 @@ export default function Contact() {
                 <div className="ml-4">
                   <p className="text-sm font-medium text-gray-500">Email</p>
                   <a 
-                    href="mailto:hello@fluencyloops.in" 
+                    href="mailto:fluencyenglish@codeexpoglobal.com" 
                     className="mt-1 text-lg text-indigo-600 hover:text-indigo-700 font-semibold hover:underline"
                   >
-                    hello@fluencyloops.in
+                    fluencyenglish@codeexpoglobal.com
                   </a>
                 </div>
               </div>
@@ -75,7 +75,7 @@ export default function Contact() {
             {/* CTA Button */}
             <div className="mt-8 pt-6 border-t border-gray-200">
               <a
-                href="mailto:hello@fluencyloops.in"
+                href="mailto:fluencyenglish@codeexpoglobal.com"
                 className="w-full inline-flex justify-center items-center px-6 py-3 border border-transparent text-base font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 transition-colors"
               >
                 Send us an Email
@@ -115,7 +115,7 @@ export default function Contact() {
                 </div>
                 <div>
                   <p className="font-medium text-gray-900">Want to provide feedback?</p>
-                  <p className="text-gray-600">We'd love to hear your suggestions for improving Fluency Loops!</p>
+                  <p className="text-gray-600">We'd love to hear your suggestions for improving Fluency Loop English!</p>
                 </div>
               </div>
             </div>
@@ -133,9 +133,9 @@ export default function Contact() {
 
         {/* Additional Info Section */}
         <div className="mt-12 bg-white rounded-lg shadow-md p-8">
-          <h2 className="text-2xl font-semibold text-gray-900 mb-4">About Fluency Loops</h2>
+          <h2 className="text-2xl font-semibold text-gray-900 mb-4">About Fluency Loop English</h2>
           <p className="text-gray-700 leading-relaxed">
-            Fluency Loops by CodeExpo is an innovative English learning platform that brings personalized AI-powered 
+            Fluency Loop English by CodeExpo is an innovative English learning platform that brings personalized AI-powered 
             lessons directly to your WhatsApp. Our mission is to make quality English education accessible, convenient, 
             and engaging for learners across India. With daily lessons, voice pronunciation feedback, and progress tracking, 
             we help you build consistent learning habits and achieve fluency through practice loops.

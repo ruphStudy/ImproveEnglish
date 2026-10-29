@@ -8,7 +8,7 @@ export default function PrivacyPolicy() {
       <header className="bg-white shadow-sm">
         <div className="max-w-4xl mx-auto px-4 py-6">
           <a href="/buy" className="text-2xl font-bold text-indigo-600">
-            Fluency Loops
+            Fluency Loop English
           </a>
         </div>
       </header>
@@ -22,7 +22,7 @@ export default function PrivacyPolicy() {
           <section>
             <h2 className="text-2xl font-semibold text-gray-900 mb-3">1. Introduction</h2>
             <p>
-              Welcome to Fluency Loops, operated by CodeExpo. We are committed to protecting your personal information 
+              Welcome to Fluency Loop English, operated by CodeExpo. We are committed to protecting your personal information 
               and your right to privacy. This Privacy Policy explains how we collect, use, disclose, and safeguard 
               your information when you use our English learning service via WhatsApp.
             </p>
@@ -102,7 +102,7 @@ export default function PrivacyPolicy() {
               <li>Withdraw consent for data processing</li>
             </ul>
             <p className="mt-3">
-              To exercise these rights, please contact us at <a href="mailto:hello@fluencyloops.in" className="text-indigo-600 hover:underline">hello@fluencyloops.in</a>
+              To exercise these rights, please contact us at <a href="mailto:fluencyenglish@codeexpoglobal.com" className="text-indigo-600 hover:underline">fluencyenglish@codeexpoglobal.com</a>
             </p>
           </section>
 
@@ -129,8 +129,8 @@ export default function PrivacyPolicy() {
             </p>
             <div className="bg-gray-100 p-4 rounded-lg mt-3">
               <p><strong>Business Name:</strong> CodeExpo</p>
-              <p><strong>Product:</strong> Fluency Loops</p>
-              <p><strong>Email:</strong> <a href="mailto:hello@fluencyloops.in" className="text-indigo-600 hover:underline">hello@fluencyloops.in</a></p>
+              <p><strong>Product:</strong> Fluency Loop English</p>
+              <p><strong>Email:</strong> <a href="mailto:fluencyenglish@codeexpoglobal.com" className="text-indigo-600 hover:underline">fluencyenglish@codeexpoglobal.com</a></p>
             </div>
           </section>
         </div>
