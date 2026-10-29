@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const helmet = require('helmet');
 const cors = require('cors');
-const morgan = require('morgan');
+const accessLog = require('./middleware/accessLog');
 const rateLimit = require('express-rate-limit');
 const mongoose = require('mongoose');
 const { errorHandler } = require('./middleware/errorHandler');
@@ -25,7 +25,7 @@ app.use(cors({
   origin: ['http://localhost:5173', 'http://localhost:5174', 'https://www.fluencyloop.in'],
   credentials: true
 }));
-app.use(morgan('dev'));
+app.use(accessLog());
 
 // IMPORTANT: Razorpay and Meta webhooks need raw body, applied before express.json()
 require('./middleware/bodyParsers')(app);
