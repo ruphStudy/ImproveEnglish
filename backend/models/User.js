@@ -74,10 +74,10 @@ const userSchema = new mongoose.Schema({
     // every onboarding check treats as "already onboarded" for backward compatibility.
   },
   assessedLevel: {
-    type: String,
-    enum: ['beginner', 'intermediate', 'advanced'],
-    default: null
-  }, // Level recommended by the onboarding assessment - informational only.
+  type: String,
+  enum: ['beginner', 'intermediate', 'advanced', null],
+  default: null
+}, // Level recommended by the onboarding assessment - informational only.
      // Never silently overwrites `level`, since PlanMaster prices are level-specific.
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }

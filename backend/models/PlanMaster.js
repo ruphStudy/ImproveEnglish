@@ -4,7 +4,7 @@ const planMasterSchema = new mongoose.Schema({
   planName: {
     type: String,
     required: true,
-    enum: ['plan30', 'plan60', 'plan180', 'plan365']
+    enum: ['plan30', 'plan90', 'plan365']
   },
   days: {
     type: Number,

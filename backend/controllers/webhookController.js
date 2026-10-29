@@ -419,7 +419,7 @@ exports.handleWebhook = async (req, res, next) => {
               phone,
               'streak_reminder',
               [user.name, user.streak.toString()],
-              'en'
+              'en_US'
             );
             
             await Log.create({

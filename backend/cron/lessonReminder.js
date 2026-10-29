@@ -94,7 +94,7 @@ async function runNoonReminderJobInner() {
           user.phone,
           'lesson_reminder_noon',
           [user.name, user.currentDay.toString()],
-          'en'
+          'en_US'
         );
         
         // Mark reminder as sent
@@ -221,7 +221,7 @@ async function runEveningReminderJobInner() {
           user.phone,
           'lesson_reminder_evening',
           [user.name, user.currentDay.toString()],
-          'en'
+          'en_US'
         );
         
         // Mark reminder as sent

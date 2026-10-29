@@ -184,7 +184,7 @@ async function processLessonJob(userId) {
         user.currentDay.toString(),
         streakMessage
       ],
-      'en'
+      'en_US'
     );
 
     // Mark lesson as notified

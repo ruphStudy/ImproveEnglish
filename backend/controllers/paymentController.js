@@ -169,8 +169,6 @@ exports.handleWebhook = async (req, res) => {
       .digest('hex');
 
     console.log('🔐 Signature verification:');
-    console.log('   Received:', signature);
-    console.log('   Expected:', expectedSignature);
     console.log('   Match:', signature === expectedSignature ? '✅ YES' : '❌ NO');
 
     if (signature !== expectedSignature) {
@@ -182,7 +180,6 @@ exports.handleWebhook = async (req, res) => {
     // Parse event
     const event = JSON.parse(body);
     console.log(`📥 Event Type: ${event.event}`);
-    console.log('📋 Full event data:', JSON.stringify(event, null, 2));
 
     // Handle payment.captured event
     if (event.event === 'payment.captured') {
