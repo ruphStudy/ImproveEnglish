@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const User = require('../models/User');
 const Log = require('../models/Log');
 const Lesson = require('../models/Lesson');
@@ -26,31 +27,35 @@ const LEVEL_MAP = {
 };
 
 // Meta webhook verification
+// Never log the token, the challenge or the raw query.
 exports.verify = (req, res) => {
-  console.log('🔍 Webhook Verification Request:', req.query);
   const verify_token = process.env.WHATSAPP_VERIFY_TOKEN;
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
-  console.log("🔍 Webhook Verification Request:", {
-    mode,
-    token,
-    challenge,
-    verifyTokenFromEnv: verify_token,
-  });
-  if (mode && token && mode === 'subscribe' && token.trim() === verify_token) {
+  if (
+    verify_token &&
+    mode === 'subscribe' &&
+    typeof token === 'string' &&
+    typeof challenge === 'string' &&
+    tokensMatch(token.trim(), verify_token)
+  ) {
     console.log('✅ Webhook verified successfully!');
-    return res.status(200).send(challenge);
+    return res.status(200).type('text/plain').send(challenge);
   }
   console.log('❌ Webhook verification failed!');
   res.sendStatus(403);
 };
 
-// WhatsApp webhook handler
+function tokensMatch(provided, expected) {
+  const a = Buffer.from(provided);
+  const b = Buffer.from(expected);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+// WhatsApp webhook handler (signature already verified by verifyMetaSignature)
 exports.handleWebhook = async (req, res, next) => {
   try {
-    console.log('📩 Webhook received:', JSON.stringify(req.body, null, 2));
-    
     const entry = req.body.entry?.[0]?.changes?.[0]?.value;
     if (!entry || !entry.messages) {
       console.log('⚠️ No messages in webhook payload');
@@ -58,7 +63,7 @@ exports.handleWebhook = async (req, res, next) => {
     }
     
     for (const msg of entry.messages) {
-      console.log(`📱 Processing message: ID=${msg.id}, From=${msg.from}, Text=${msg.text?.body}`);
+      console.log(`📱 Processing message: ID=${msg.id}, Type=${msg.type}`);
       
       if (await isDuplicateMessage(msg.id)) {
         console.log(`⏭️ Duplicate message skipped: ${msg.id}`);
@@ -521,7 +526,7 @@ exports.handleWebhook = async (req, res, next) => {
       }
       // Handle plan selection: Can be "30", "90", "365" OR "beginner 90", "B90", "I 30" OR "90 PROMO50", "B 90 SAVE20", etc.
       else if ((text && text.match(/^(beginner|intermediate|advanced|b|i|a)?\s*(30|90|365)(\s+[A-Za-z0-9]+)?$/i)) || ['30', '90', '365'].includes(text)) {
-        console.log(`📅 User ${phone} selected plan: ${text}`);
+        console.log(`📅 User ${phone} selected a plan`);
         
         // Parse input
         let selectedLevel = user.level; // Default to current level
@@ -741,7 +746,7 @@ exports.handleWebhook = async (req, res, next) => {
         }
       }
       else {
-        console.log(`ℹ️ Message "${text}" ignored - User state: ${user.state}`);
+        console.log(`ℹ️ Message ignored - User state: ${user.state}`);
       }
       } catch (msgErr) {
         console.error(`❌ Error processing message ${msg.id} from ${msg.from}:`, msgErr.message);

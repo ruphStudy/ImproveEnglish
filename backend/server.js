@@ -27,10 +27,8 @@ app.use(cors({
 }));
 app.use(morgan('dev'));
 
-// IMPORTANT: Razorpay webhook needs raw body, apply before express.json()
-app.use('/api/payments/razorpay-webhook', express.raw({ type: 'application/json' }));
-
-app.use(express.json());
+// IMPORTANT: Razorpay and Meta webhooks need raw body, applied before express.json()
+require('./middleware/bodyParsers')(app);
 
 // Rate limit for registration endpoint
 const registerLimiter = rateLimit({
