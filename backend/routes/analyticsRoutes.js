@@ -14,5 +14,6 @@ router.get('/funnel', adminAuth, analyticsController.getFunnelAnalytics);
 router.get('/retention', adminAuth, analyticsController.getRetentionAnalytics);
 router.get('/engagement', adminAuth, analyticsController.getEngagementAnalytics);
 router.get('/subscriptions', adminAuth, analyticsController.getSubscriptionAnalytics);
+router.get('/ai-costs', adminAuth, analyticsController.getAiCostAnalytics);
 
 module.exports = router;

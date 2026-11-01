@@ -6,6 +6,7 @@ import Logs from './pages/Logs';
 import RegistrationLogs from './pages/RegistrationLogs';
 import BuyPlan from './pages/BuyPlan';
 import Analytics from './pages/Analytics';
+import AiCosts from './pages/AiCosts';
 import PrivacyPolicy from './pages/PrivacyPolicy';
 import Terms from './pages/Terms';
 import Contact from './pages/Contact';
@@ -32,6 +33,7 @@ export default function App() {
                 <a href="/" className="font-bold">Dashboard</a>
                 <a href="/users">Users</a>
                 <a href="/analytics" className="text-purple-600">Analytics</a>
+                <a href="/ai-costs" className="text-orange-600">AI Costs</a>
                 <a href="/registration-logs" className="text-green-600">Registration Logs</a>
                 <a href="/logs">System Logs</a>
               </nav>
@@ -40,6 +42,7 @@ export default function App() {
                   <Route path="/" element={<Dashboard />} />
                   <Route path="/users" element={<Users />} />
                   <Route path="/analytics" element={<Analytics />} />
+                  <Route path="/ai-costs" element={<AiCosts />} />
                   <Route path="/registration-logs" element={<RegistrationLogs />} />
                   <Route path="/logs" element={<Logs />} />
                   <Route path="*" element={<Navigate to="/" />} />

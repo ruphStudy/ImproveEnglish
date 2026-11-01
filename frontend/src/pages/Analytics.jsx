@@ -1,7 +1,5 @@
 import { useState, useEffect } from 'react';
-import axios from 'axios';
-
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
+import api from '../api';
 
 function Analytics() {
   const [revenueData, setRevenueData] = useState(null);
@@ -17,8 +15,8 @@ function Analytics() {
     try {
       setLoading(true);
       const [revenueRes, activityRes] = await Promise.all([
-        axios.get(`${API_URL}/analytics/revenue`),
-        axios.get(`${API_URL}/analytics/activity`)
+        api.get('/analytics/revenue'),
+        api.get('/analytics/activity')
       ]);
       
       setRevenueData(revenueRes.data.data);

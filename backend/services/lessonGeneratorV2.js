@@ -1,5 +1,6 @@
 const openai = require('../config/openai');
 const Log = require('../models/Log');
+const { trackOpenAI } = require('../utils/aiUsageTracker');
 const { getScenarioFamily, getGoalContextLabel } = require('./onboardingService');
 
 const GENERATION_VERSION = 'v3';
@@ -298,13 +299,13 @@ function generateFallbackLesson(user, topic) {
 // PART 8: MAIN LESSON GENERATOR - one call, at most one corrective retry
 // ============================================================================
 
-async function callOpenAI(messages, temperature) {
-  return openai.chat.completions.create({
+async function callOpenAI(messages, temperature, operation, user) {
+  return trackOpenAI({ operation, model: 'gpt-4o-mini', userId: user && user._id }, () => openai.chat.completions.create({
     model: 'gpt-4o-mini',
     temperature,
     response_format: { type: 'json_object' },
     messages
-  });
+  }));
 }
 
 async function generateLesson(user, topic, tutorMemory) {
@@ -324,7 +325,7 @@ async function generateLesson(user, topic, tutorMemory) {
 
     let response;
     try {
-      response = await callOpenAI(baseMessages, 0.7);
+      response = await callOpenAI(baseMessages, 0.7, 'lesson_generation', user);
     } catch (apiError) {
       console.error('❌ OpenAI API call failed:', apiError.message);
       await Log.create({
@@ -363,7 +364,7 @@ async function generateLesson(user, topic, tutorMemory) {
           ...baseMessages,
           { role: 'assistant', content: response.choices[0].message.content },
           { role: 'user', content: correctionNote }
-        ], 0.5);
+        ], 0.5, 'lesson_generation_retry', user);
 
         const retryJson = safeParseJson(retryResponse.choices[0].message.content);
         const retryValidation = retryJson

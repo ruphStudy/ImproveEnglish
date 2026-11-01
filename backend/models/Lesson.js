@@ -64,5 +64,9 @@ const lessonSchema = new mongoose.Schema({
 // Index for fast lookups
 lessonSchema.index({ userId: 1, day: 1 });
 lessonSchema.index({ userId: 1, status: 1 });
+// Date-range lookups for AI cost analytics (lessons sent / completed in a period)
+lessonSchema.index({ notifiedAt: 1 });
+lessonSchema.index({ sentAt: 1 });
+lessonSchema.index({ completedAt: 1 });
 
 module.exports = mongoose.model('Lesson', lessonSchema);

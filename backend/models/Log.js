@@ -56,6 +56,7 @@ const logSchema = new mongoose.Schema({
       'DAY30_REPORT_SENT',
       'COMEBACK_REMINDER_SENT',
       'UPGRADE_NUDGE_SENT',
+      'AI_USAGE_TRACKING_ERROR',
       'ERROR'
     ],
     required: true

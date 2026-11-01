@@ -341,3 +341,22 @@ exports.getSubscriptionAnalytics = async (req, res, next) => {
     next(error);
   }
 };
+
+/**
+ * OpenAI cost analytics (estimated from recorded usage, not provider billing).
+ * GET /api/analytics/ai-costs?preset=today|week|month|custom&from=YYYY-MM-DD&to=YYYY-MM-DD
+ * Dates are IST calendar days; "to" is inclusive.
+ */
+exports.getAiCostAnalytics = async (req, res, next) => {
+  try {
+    const { resolveRange, getAiCostReport } = require('../services/aiCostService');
+    const range = resolveRange(req.query);
+    if (range.error) return res.status(400).json({ success: false, errors: [range.error] });
+
+    const data = await getAiCostReport(range);
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('❌ Error fetching AI cost analytics:', error);
+    next(error);
+  }
+};

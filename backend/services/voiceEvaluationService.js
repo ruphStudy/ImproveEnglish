@@ -4,6 +4,7 @@ const path = require('path');
 const crypto = require('crypto');
 const openai = require('../config/openai');
 const Log = require('../models/Log');
+const { trackOpenAI } = require('../utils/aiUsageTracker');
 const Lesson = require('../models/Lesson');
 const TutorMemory = require('../models/TutorMemory');
 const SpeakingAttempt = require('../models/SpeakingAttempt');
@@ -91,12 +92,15 @@ async function downloadWhatsAppAudio(mediaId) {
  * @param {string} audioFilePath - Local path to audio file
  * @returns {Promise<string>} - Transcribed text
  */
-async function transcribeAudio(audioFilePath) {
+async function transcribeAudio(audioFilePath, tracking = {}) {
   try {
-    const transcription = await openai.audio.transcriptions.create({
-      file: fs.createReadStream(audioFilePath),
-      model: 'whisper-1'
-    });
+    const transcription = await trackOpenAI(
+      { operation: tracking.operation || 'voice_transcription', model: 'whisper-1', userId: tracking.userId, kind: 'transcription' },
+      () => openai.audio.transcriptions.create({
+        file: fs.createReadStream(audioFilePath),
+        model: 'whisper-1'
+      })
+    );
 
     console.log(`✅ Transcription complete (${transcription.text.length} chars)`);
     return transcription.text;
@@ -310,12 +314,12 @@ async function evaluateTranscript(context) {
 
   let response;
   try {
-    response = await openai.chat.completions.create({
+    response = await trackOpenAI({ operation: 'voice_evaluation', model: VOICE_MODEL, userId: context.userId }, () => openai.chat.completions.create({
       model: VOICE_MODEL,
       temperature: 0.4,
       response_format: { type: 'json_object' },
       messages: baseMessages
-    });
+    }));
   } catch (apiError) {
     console.error('❌ Evaluation API call failed:', apiError.message);
     return { evaluation: buildFallbackEvaluation(context.transcript), validationStatus: 'fallback' };
@@ -331,7 +335,7 @@ async function evaluateTranscript(context) {
   console.error('⚠️ Evaluation JSON invalid, retrying once:', validation.errors.join('; '));
 
   try {
-    const retryResponse = await openai.chat.completions.create({
+    const retryResponse = await trackOpenAI({ operation: 'voice_evaluation_retry', model: VOICE_MODEL, userId: context.userId }, () => openai.chat.completions.create({
       model: VOICE_MODEL,
       temperature: 0.3,
       response_format: { type: 'json_object' },
@@ -340,7 +344,7 @@ async function evaluateTranscript(context) {
         { role: 'assistant', content: response.choices[0].message.content },
         { role: 'user', content: `That was invalid: ${validation.errors.join('; ')}. Return corrected JSON only, matching the exact required structure.` }
       ]
-    });
+    }));
 
     const retryEvaluation = safeParseJson(retryResponse.choices[0].message.content);
     const retryValidation = validateEvaluationJson(retryEvaluation);
@@ -399,7 +403,7 @@ async function processVoiceEvaluation(mediaId, user) {
 
   try {
     audioFilePath = await downloadWhatsAppAudio(mediaId);
-    const transcript = await transcribeAudio(audioFilePath);
+    const transcript = await transcribeAudio(audioFilePath, { operation: 'voice_transcription', userId: user._id });
 
     await Log.create({
       type: 'VOICE_ATTEMPT_CREATED',
@@ -419,6 +423,7 @@ async function processVoiceEvaluation(mediaId, user) {
     const weakAreaContext = (tutorMemory?.weakAreas || []).slice(-WEAK_AREA_CONTEXT_LIMIT);
 
     const { evaluation, validationStatus } = await evaluateTranscript({
+      userId: user._id,
       transcript,
       level: user.level,
       topicTitle: lesson ? lesson.topicTitle : null,

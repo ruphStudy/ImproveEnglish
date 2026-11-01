@@ -1,5 +1,6 @@
 const openai = require('../config/openai');
 const Log = require('../models/Log');
+const { trackOpenAI } = require('../utils/aiUsageTracker');
 const LearnerAssessment = require('../models/LearnerAssessment');
 const { ASSESSMENT_QUESTIONS } = LearnerAssessment;
 const {
@@ -47,7 +48,7 @@ async function recordVoiceAnswer(assessment, question, mediaId) {
   let audioFilePath = null;
   try {
     audioFilePath = await downloadWhatsAppAudio(mediaId);
-    const transcript = await transcribeAudio(audioFilePath);
+    const transcript = await transcribeAudio(audioFilePath, { operation: 'assessment_transcription', userId: assessment.userId });
     assessment.voiceResponses.push({
       questionId: question.questionId,
       question: question.question,
@@ -163,12 +164,12 @@ async function runAssessmentEvaluation(assessment) {
 
   let response;
   try {
-    response = await openai.chat.completions.create({
+    response = await trackOpenAI({ operation: 'assessment_evaluation', model: ASSESSMENT_MODEL, userId: assessment.userId }, () => openai.chat.completions.create({
       model: ASSESSMENT_MODEL,
       temperature: 0.4,
       response_format: { type: 'json_object' },
       messages: baseMessages
-    });
+    }));
   } catch (apiError) {
     console.error('❌ Assessment API call failed:', apiError.message);
     return finalizeResult(heuristicFallback(assessment), 'fallback');
@@ -184,7 +185,7 @@ async function runAssessmentEvaluation(assessment) {
   console.error('⚠️ Assessment JSON invalid, retrying once:', validation.errors.join('; '));
 
   try {
-    const retryResponse = await openai.chat.completions.create({
+    const retryResponse = await trackOpenAI({ operation: 'assessment_evaluation_retry', model: ASSESSMENT_MODEL, userId: assessment.userId }, () => openai.chat.completions.create({
       model: ASSESSMENT_MODEL,
       temperature: 0.3,
       response_format: { type: 'json_object' },
@@ -193,7 +194,7 @@ async function runAssessmentEvaluation(assessment) {
         { role: 'assistant', content: response.choices[0].message.content },
         { role: 'user', content: `That was invalid: ${validation.errors.join('; ')}. Return corrected JSON only.` }
       ]
-    });
+    }));
 
     const retryResult = safeParseJson(retryResponse.choices[0].message.content);
     const retryValidation = validateAssessmentJson(retryResult);
