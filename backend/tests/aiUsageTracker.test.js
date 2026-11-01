@@ -119,3 +119,38 @@ test('a record-building error never turns a successful OpenAI call into a failur
   await expect(trackOpenAI({ operation: 'lesson_generation', model: 'gpt-4o-mini' }, async () => response)).resolves.toBe(response);
   expect(getTrackingHealth().failures).toBe(before.failures + 1);
 });
+
+describe('whisper-1 response shapes', () => {
+  const track = (response) => trackOpenAI(
+    { operation: 'voice_transcription', model: 'whisper-1', userId: 'u3', kind: 'transcription' },
+    async () => response
+  );
+
+  test('verbose_json: cost from the audio duration field', async () => {
+    await track({ task: 'transcribe', language: 'english', duration: 45.5, text: 'hello there', segments: [] });
+    const record = AiUsage.create.mock.calls[0][0];
+    expect(record).toMatchObject({ audioSeconds: 45.5, costKnown: true, model: 'whisper-1' });
+    expect(record.costUsd).toBeCloseTo((45.5 / 60) * 0.006, 15);
+  });
+
+  test('verbose_json with usage: billed usage.seconds takes precedence over duration', async () => {
+    await track({ duration: 45.5, text: 'hi', usage: { type: 'duration', seconds: 46 } });
+    expect(AiUsage.create.mock.calls[0][0].audioSeconds).toBe(46);
+  });
+
+  test('plain json with no duration or usage: unknown cost, never zero', async () => {
+    await track({ text: 'hi' });
+    expect(AiUsage.create.mock.calls[0][0]).toMatchObject({ costKnown: false, costUsd: null, unknownReason: 'audio_duration_missing' });
+  });
+
+  test('invalid duration values are treated as unknown', async () => {
+    await track({ text: 'hi', duration: 'abc' });
+    await track({ text: 'hi', duration: -3 });
+    expect(AiUsage.create.mock.calls.map(c => c[0].costKnown)).toEqual([false, false]);
+  });
+
+  test('a zero-length clip is a known zero cost', async () => {
+    await track({ text: '', duration: 0 });
+    expect(AiUsage.create.mock.calls[0][0]).toMatchObject({ audioSeconds: 0, costUsd: 0, costKnown: true });
+  });
+});

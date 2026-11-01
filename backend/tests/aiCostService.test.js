@@ -35,6 +35,10 @@ describe('resolveRange (IST calendar, exclusive end)', () => {
     expect(resolveRange({ preset: 'custom', from: '2026-02-30', to: '2026-03-01' }, NOW).error).toBeDefined();
     expect(resolveRange({ preset: 'custom', from: '2026-03-02', to: '2026-03-01' }, NOW).error).toBeDefined();
     expect(resolveRange({ preset: 'year' }, NOW).error).toBeDefined();
+    expect(resolveRange({ from: '2026-13-01', to: '2026-13-05' }, NOW).error).toBeDefined(); // Invalid Date, must not throw
+    expect(resolveRange({ from: '2026-00-10', to: '2026-01-10' }, NOW).error).toBeDefined();
+    expect(resolveRange({ from: '2026-04-31', to: '2026-05-01' }, NOW).error).toBeDefined();
+    expect(resolveRange({ from: ['2026-01-01'], to: '2026-01-02' }, NOW).error).toBeDefined();
     expect(resolveRange({ from: '2024-01-01', to: '2026-01-01' }, NOW).error).toMatch(/exceed/);
   });
 });

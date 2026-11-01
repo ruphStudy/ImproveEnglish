@@ -34,7 +34,10 @@ function addDays(dateStr, n) {
 }
 
 function isValidDateString(s) {
-  return typeof s === 'string' && DATE_RE.test(s) && new Date(`${s}T00:00:00.000Z`).toISOString().slice(0, 10) === s;
+  if (typeof s !== 'string' || !DATE_RE.test(s)) return false;
+  const d = new Date(`${s}T00:00:00.000Z`);
+  // Invalid Date (e.g. month 13) would make toISOString() throw - reject instead.
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
 }
 
 /**

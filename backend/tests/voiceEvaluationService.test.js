@@ -327,3 +327,20 @@ describe('processVoiceEvaluation (end-to-end with mocks)', () => {
     expect(Log.create).toHaveBeenCalledWith(expect.objectContaining({ type: 'VOICE_ATTEMPT_FAILED' }));
   });
 });
+
+describe('transcribeAudio - Whisper request/response', () => {
+  test('requests verbose_json and returns the same transcript text', async () => {
+    jest.spyOn(fs, 'createReadStream').mockReturnValue('stream');
+    openaiInstance.audio.transcriptions.create.mockResolvedValueOnce({
+      task: 'transcribe', language: 'english', duration: 4.2, text: 'I would like a coffee please.', segments: []
+    });
+
+    const text = await voiceService.transcribeAudio('/tmp/a.ogg', { operation: 'voice_transcription', userId: 'user1' });
+
+    expect(text).toBe('I would like a coffee please.');
+    expect(openaiInstance.audio.transcriptions.create).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'whisper-1', response_format: 'verbose_json' })
+    );
+    fs.createReadStream.mockRestore();
+  });
+});

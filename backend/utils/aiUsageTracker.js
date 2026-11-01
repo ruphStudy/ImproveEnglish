@@ -34,8 +34,11 @@ function buildSuccessRecord(base, response, kind) {
   }
 
   if (kind === 'transcription') {
+    // Prefer the billed usage.seconds when present; otherwise verbose_json's
+    // audio `duration`. Neither -> unknown cost.
     const usage = response?.usage;
-    const seconds = usage && usage.type === 'duration' ? toCount(usage.seconds) : null;
+    const billedSeconds = usage && usage.type === 'duration' ? toCount(usage.seconds) : null;
+    const seconds = billedSeconds ?? toCount(response?.duration);
     record.audioSeconds = seconds;
     const cost = computeAudioCost(seconds, pricing);
     return cost === null

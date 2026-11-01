@@ -98,7 +98,10 @@ async function transcribeAudio(audioFilePath, tracking = {}) {
       { operation: tracking.operation || 'voice_transcription', model: 'whisper-1', userId: tracking.userId, kind: 'transcription' },
       () => openai.audio.transcriptions.create({
         file: fs.createReadStream(audioFilePath),
-        model: 'whisper-1'
+        model: 'whisper-1',
+        // Same .text as the default json format, plus the audio `duration`
+        // (seconds) needed for per-minute cost tracking.
+        response_format: 'verbose_json'
       })
     );
 
