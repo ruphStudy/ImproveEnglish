@@ -91,7 +91,8 @@ const promoCodeSchema = new mongoose.Schema({
     userId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
-      required: true
+      // A free-beta reservation is made before the user exists; userId is set on activation.
+      required: function () { return !this.freeActivationId; }
     },
     userName: String,
     userPhone: String,
@@ -105,7 +106,11 @@ const promoCodeSchema = new mongoose.Schema({
     orderId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Order'
-    }
+    },
+    freeActivationId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'FreeActivation'
+    } // set only for free-beta (100%) redemptions
   }]
 }, {
   timestamps: true

@@ -1,7 +1,22 @@
 const express = require('express');
 const router = express.Router();
 const paymentController = require('../controllers/paymentController');
+const rateLimit = require('express-rate-limit');
 const adminAuth = require('../middleware/adminAuth');
+
+const freeActivationLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Too many attempts. Please try again later.' }
+});
+
+// Public checkout config (Razorpay test-mode flag only)
+router.get('/config', paymentController.getPublicConfig);
+
+// Free beta activation (100% promo) - rate-limited, fully validated server-side
+router.post('/activate-free', freeActivationLimiter, paymentController.activateFree);
 
 // Create Razorpay order
 router.post('/create-order', paymentController.createOrder);

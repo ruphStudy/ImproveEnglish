@@ -62,6 +62,11 @@ const userSchema = new mongoose.Schema({
     type: String,
     default: null
   }, // Razorpay payment ID last applied to this user's subscription - guards a crashed/retried payment from double-extending expiry or resetting progress twice
+  freeActivationId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'FreeActivation',
+    default: undefined
+  }, // Set only on users created by a free-beta promo activation (lets a retry recognise its own user)
   learningGoal: {
     type: String,
     enum: ['daily_english', 'workplace', 'interview', 'college_placement', 'customer_service', 'sales', 'travel'],

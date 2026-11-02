@@ -1,6 +1,7 @@
 const User = require('../models/User');
 const Log = require('../models/Log');
 const RegistrationLog = require('../models/RegistrationLog');
+const { normalizePhone } = require('../utils/phone');
 
 /**
  * DEPRECATED: Google Form registration
@@ -19,15 +20,9 @@ exports.register = async (req, res, next) => {
   let { name, phone, email } = req.body;
   const ipAddress = req.ip || req.connection.remoteAddress;
   
-  // Normalize phone number: Add 91 country code for Indian numbers
+  // Normalize phone number (route is disabled - see routes/userRoutes.js)
   if (phone) {
-    // Remove any + sign
-    phone = phone.replace(/\+/g, '');
-    
-    // Add 91 if not already present
-    if (!phone.startsWith('91')) {
-      phone = '91' + phone;
-    }
+    phone = normalizePhone(phone);
   }
   
   try {
@@ -157,12 +152,10 @@ exports.getUserByPhone = async (req, res, next) => {
   try {
     let { phone } = req.params;
     
-    // Normalize phone number
+    // Normalize phone number; fall back to the raw digits so admins can still
+    // look up any legacy record stored in a non-standard format.
     if (phone) {
-      phone = phone.replace(/\+/g, '');
-      if (!phone.startsWith('91')) {
-        phone = '91' + phone;
-      }
+      phone = normalizePhone(phone) || String(phone).replace(/\D/g, '');
     }
     
     const user = await User.findOne({ phone });

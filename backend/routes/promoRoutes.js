@@ -1,72 +1,63 @@
 const express = require('express');
 const router = express.Router();
 const PromoCode = require('../models/PromoCode');
-const { validatePromoCode } = require('../services/promoService');
+const rateLimit = require('express-rate-limit');
+const { quotePromo } = require('../services/freePromoService');
+const { normalizePhone } = require('../utils/phone');
 const adminAuth = require('../middleware/adminAuth');
 
+const promoValidateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Too many attempts. Please try again later.' }
+});
+
 /**
- * Validate promo code
+ * Validate promo code (display only - nothing is reserved or charged here)
  * POST /api/promo/validate
- * Body: { code, userId (optional), userPhone, amount, level, duration }
+ * Body: { code, phone (or userPhone), country, level, planDuration (or duration) }
+ * The price always comes from PlanMaster; any client-sent amount is ignored.
  */
-router.post('/validate', async (req, res) => {
+router.post('/validate', promoValidateLimiter, async (req, res) => {
   try {
-    const { code, userId, userPhone, amount, level, duration } = req.body;
-    
-    // Validate required fields
-    if (!code || !amount || !level || !duration) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Missing required fields: code, amount, level, duration' 
+    const { code, level, country } = req.body || {};
+    const rawPhone = req.body?.phone ?? req.body?.userPhone;
+    const planDuration = req.body?.planDuration ?? req.body?.duration;
+
+    if (!code || !rawPhone || !level || !planDuration) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing required fields: code, phone, level, planDuration'
       });
     }
-    
-    if (!userPhone && !userId) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Either userId or userPhone is required' 
-      });
+
+    const phone = normalizePhone(rawPhone, country);
+    if (!phone) {
+      return res.status(400).json({ success: false, message: 'Please enter a valid WhatsApp number for the selected country' });
     }
-    
-    // Validate promo code
-    const result = await validatePromoCode(
-      code,
-      userId,
-      amount,
-      level,
-      duration,
-      userPhone
-    );
-    
-    if (result.valid) {
-      return res.json({
-        success: true,
-        valid: true,
-        promo: {
-          code: result.code,
-          description: result.description,
-          discountType: result.discountType,
-          discountValue: result.discountValue,
-          originalAmount: result.originalAmount,
-          discountAmount: result.discountAmount,
-          finalAmount: result.finalAmount,
-          savings: result.savings
-        }
-      });
-    } else {
-      return res.json({
-        success: true,
-        valid: false,
-        message: result.message
-      });
+
+    const quote = await quotePromo({ code, phone, level, planDuration });
+    if (!quote.ok) {
+      return res.json({ success: true, valid: false, message: quote.message });
     }
-    
-  } catch (err) {
-    console.error('❌ Promo validation error:', err);
-    res.status(500).json({ 
-      success: false, 
-      error: err.message 
+
+    return res.json({
+      success: true,
+      valid: true,
+      isFree: quote.isFree,
+      promo: {
+        code: quote.code,
+        description: quote.description,
+        originalAmount: quote.originalAmount,
+        discountAmount: quote.discountAmount,
+        finalAmount: quote.finalAmount
+      }
     });
+  } catch (err) {
+    console.error('❌ Promo validation error:', err.message);
+    res.status(500).json({ success: false, message: 'Error validating promo code' });
   }
 });
 

@@ -59,6 +59,11 @@ export const getAiCosts = (params) => api.get('/analytics/ai-costs', { params })
 // Payment APIs
 export const createOrder = (data) => api.post('/payments/create-order', data);
 export const getOrderStatus = (orderId) => api.get(`/payments/order-status/${orderId}`);
+export const getPaymentConfig = () => api.get('/payments/config');
+export const activateFree = (data) => api.post('/payments/activate-free', data);
+
+// Promo APIs (price is always computed server-side)
+export const validatePromo = (data) => api.post('/promo/validate', data);
 
 // Plan APIs
 export const getPlans = () => api.get('/plans');

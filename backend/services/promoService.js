@@ -96,7 +96,7 @@ async function validatePromoCode(code, userId, amount, level, duration, userPhon
     
     // Check duration restriction
     if (promo.applicableDurations && promo.applicableDurations.length > 0) {
-      if (!promo.applicableDurations.includes(duration)) {
+      if (!promo.applicableDurations.includes(Number(duration))) {
         return { 
           valid: false, 
           message: `Promo code not valid for ${duration}-day plan` 

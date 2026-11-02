@@ -57,6 +57,8 @@ const logSchema = new mongoose.Schema({
       'COMEBACK_REMINDER_SENT',
       'UPGRADE_NUDGE_SENT',
       'AI_USAGE_TRACKING_ERROR',
+      'FREE_PROMO_ACTIVATED',
+      'FREE_PROMO_WELCOME_FAILED',
       'ERROR'
     ],
     required: true

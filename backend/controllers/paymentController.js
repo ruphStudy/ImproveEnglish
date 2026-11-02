@@ -6,6 +6,7 @@ const Log = require('../models/Log');
 const whatsappService = require('../services/whatsappService');
 const PlanMaster = require('../models/PlanMaster');
 const { processSuccessfulPayment, reconcileStuckPendingOrders } = require('../services/paymentProcessingService');
+const { normalizePhone } = require('../utils/phone');
 
 // Initialize Razorpay
 const razorpay = new Razorpay({
@@ -20,24 +21,57 @@ const LEVEL_MAP = {
   'advanced': 'advance'
 };
 
-// Phone normalization utility (reused from existing userController)
-function normalizePhone(phone) {
-  if (!phone) return null;
-  // Remove any spaces, dashes, or other characters
-  let normalized = phone.replace(/[\s\-\(\)]/g, '');
-  // Remove leading + if present
-  normalized = normalized.replace(/^\+/, '');
-  // Add 91 if not present
-  if (!normalized.startsWith('91')) {
-    normalized = '91' + normalized;
+// Public, non-secret checkout config (lets the UI label Razorpay Test Mode)
+exports.getPublicConfig = (req, res) => {
+  res.json({ success: true, razorpayTestMode: String(process.env.RAZORPAY_KEY_ID || '').startsWith('rzp_test_') });
+};
+
+// Free beta activation (100% promo) - no Razorpay order or payment is created.
+// Price and every promo rule are re-checked server-side in freePromoService.
+exports.activateFree = async (req, res) => {
+  try {
+    const { name, phone, country, email, level, planDuration, promoCode } = req.body || {};
+    if (!name || !phone || !email || !level || !planDuration || !promoCode) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing required fields: name, phone, email, level, planDuration, promoCode'
+      });
+    }
+    const normalizedPhone = normalizePhone(phone, country);
+    if (!normalizedPhone) {
+      return res.status(400).json({ success: false, message: 'Please enter a valid WhatsApp number for the selected country' });
+    }
+
+    const { activateFreePromo } = require('../services/freePromoService');
+    const result = await activateFreePromo({
+      name: String(name).trim(),
+      email: String(email).trim(),
+      phone: normalizedPhone,
+      level,
+      planDuration,
+      code: promoCode
+    });
+
+    if (!result.ok) {
+      return res.status(result.status).json({ success: false, message: result.message });
+    }
+    res.json({
+      success: true,
+      alreadyActivated: result.alreadyActivated,
+      level: result.level,
+      planDuration: result.planDuration,
+      expiryDate: result.expiryDate
+    });
+  } catch (error) {
+    console.error('❌ Error activating free beta:', error.message);
+    res.status(500).json({ success: false, message: 'Could not activate free access. Please try again.' });
   }
-  return normalized;
-}
+};
 
 // Create Razorpay Order
 exports.createOrder = async (req, res) => {
   try {
-    const { name, phone, email, level, planDuration, utmSource } = req.body;
+    const { name, phone, country, email, level, planDuration, utmSource } = req.body;
 
     // Validation
     if (!name || !phone || !email || !level || !planDuration) {
@@ -55,8 +89,14 @@ exports.createOrder = async (req, res) => {
       });
     }
 
-    // Normalize phone
-    const normalizedPhone = normalizePhone(phone);
+    // Normalize phone (country = ISO code from the form; defaults to India)
+    const normalizedPhone = normalizePhone(phone, country);
+    if (!normalizedPhone) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please enter a valid WhatsApp number for the selected country'
+      });
+    }
 
     // Map level to database format
     const dbLevel = LEVEL_MAP[level];
