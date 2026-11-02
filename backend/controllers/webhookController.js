@@ -87,6 +87,34 @@ exports.handleWebhook = async (req, res, next) => {
       console.log(`👤 User found: ${user.name} (${phone}) - State: ${user.state}`);
       await Log.create({ type: 'MESSAGE_RECEIVED', phone, message: text || `[${msg.type || 'UNKNOWN'}]` });
 
+      // Messaging preferences. STOP / STOP ALL / UNSUBSCRIBE: no business-initiated
+      // (template) messages at all until RESUME - the learner can still message
+      // START / DONE and gets normal replies. Never changed automatically
+      // (e.g. not by a payment or renewal).
+      if (['STOP', 'STOP ALL', 'UNSUBSCRIBE', 'RESUME'].includes(text)) {
+        const optOut = text !== 'RESUME';
+        user.whatsappOptOut = optOut;
+        user.whatsappOptOutAt = optOut ? new Date() : null;
+        await user.save();
+        await sendWhatsAppMessage(phone, optOut
+          ? `You're unsubscribed, ${user.name}. We won't send you scheduled WhatsApp messages anymore (daily lesson alerts, reminders, summaries or plan notices).\n\nYou can still message START any time to get your next lesson. Reply RESUME to turn messages back on.`
+          : `Welcome back ${user.name}! Scheduled WhatsApp messages are on again, including your daily lesson alert.`);
+        continue;
+      }
+
+      // Optional retention messages only (lesson-waiting reminders and progress
+      // updates). Lessons, same-day reminders and plan notices continue.
+      if (text === 'STOP REMINDERS' || text === 'START REMINDERS') {
+        const optOut = text === 'STOP REMINDERS';
+        user.retentionOptOut = optOut;
+        user.retentionOptOutAt = optOut ? new Date() : null;
+        await user.save();
+        await sendWhatsAppMessage(phone, optOut
+          ? `Okay ${user.name}, we won't send you extra reminders about unfinished lessons or progress updates.\n\nYour daily lessons and plan notices continue. Reply START REMINDERS to turn reminders back on.`
+          : `Done ${user.name}, extra lesson reminders and progress updates are back on.`);
+        continue;
+      }
+
       // Short WhatsApp onboarding (goal selection -> level assessment) for
       // brand-new users (state 'NEW'). UPGRADE must keep working regardless
       // of onboarding status, per product rule.
@@ -424,7 +452,8 @@ exports.handleWebhook = async (req, res, next) => {
               phone,
               'streak_reminder',
               [user.name, user.streak.toString()],
-              'en_US'
+              'en_US',
+              { allowOptedOut: true } // direct reply to the learner's own DONE
             );
             
             await Log.create({

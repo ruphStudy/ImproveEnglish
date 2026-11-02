@@ -18,7 +18,11 @@ const EVENT_TYPES = [
   'SUBSCRIPTION_UPGRADED',
   'DAY30_REPORT_SENT',
   'COMEBACK_REMINDER_SENT',
-  'UPGRADE_NUDGE_SENT'
+  'UPGRADE_NUDGE_SENT',
+  // Template retention (cron/retentionMessages.js) - metadata.status: claimed | accepted | failed
+  'LESSON_WAITING_REMINDER',
+  'PROGRESS_UPDATE',
+  'EXPIRY_REMINDER_SENT' // recorded by the expiry jobs so retention never adds a 2nd account message that day
 ];
 
 const learnerEventSchema = new mongoose.Schema({

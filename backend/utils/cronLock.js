@@ -28,7 +28,7 @@ end
  * critical notifications, so the job runs anyway (duplicate execution is
  * the lesser risk versus notifications never going out).
  */
-async function runWithCronLock(lockKey, ttlSeconds, fn) {
+async function runWithCronLock(lockKey, ttlSeconds, fn, { failOpen = true } = {}) {
   const key = `cron:lock:${lockKey}`;
   const token = crypto.randomUUID();
   let acquired = true;
@@ -37,8 +37,9 @@ async function runWithCronLock(lockKey, ttlSeconds, fn) {
     const result = await redisClient.set(key, token, 'NX', 'EX', ttlSeconds);
     acquired = result === 'OK';
   } catch (err) {
-    console.error(`[Cron Lock] Redis error acquiring lock for ${lockKey}, running anyway:`, err.message);
-    acquired = true;
+    // failOpen: false suits frequent jobs - skipping one tick is safer than racing.
+    console.error(`[Cron Lock] Redis error acquiring lock for ${lockKey}, ${failOpen ? 'running anyway' : 'skipping this run'}:`, err.message);
+    acquired = failOpen;
   }
 
   if (!acquired) {

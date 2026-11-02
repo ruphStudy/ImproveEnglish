@@ -66,8 +66,8 @@ test('double submission runs the activation only once', async () => {
 });
 
 test('free activation payload carries the code but never an amount', () => {
-  const payload = buildFreeActivationPayload({ ...form, amount: 0, price: 0 }, quote30);
-  assert.deepEqual(payload, { ...form, promoCode: 'BETA100' });
+  const payload = buildFreeActivationPayload({ ...form, amount: 0, price: 0 }, quote30, 'Asia/Kolkata');
+  assert.deepEqual(payload, { ...form, promoCode: 'BETA100', timezone: 'Asia/Kolkata' });
   assert.equal('amount' in payload || 'price' in payload || 'finalAmount' in payload, false);
 });
 

@@ -17,7 +17,25 @@ async function sendWhatsAppMessage(phone, message) {
   }
 }
 
-async function sendTemplateMessage(phone, template, params = [], languageCode = 'en_US') {
+/**
+ * Template messages are business-initiated, so learners who replied STOP /
+ * STOP ALL / UNSUBSCRIBE (User.whatsappOptOut) never receive one - this guard is
+ * the backstop behind the schedulers' own query filters. Only a direct response
+ * to the learner's own action may pass { allowOptedOut: true } (e.g. confirming a
+ * payment they just made, or the streak milestone right after their DONE).
+ * Throws an error with code WHATSAPP_OPTED_OUT so callers record it as not sent.
+ */
+async function assertNotOptedOut(phone, template) {
+  const User = require('../models/User'); // lazy: avoids a model <-> service load cycle
+  if (await User.exists({ phone, whatsappOptOut: true })) {
+    const err = new Error(`Learner opted out of proactive WhatsApp messages - ${template} not sent`);
+    err.code = 'WHATSAPP_OPTED_OUT';
+    throw err;
+  }
+}
+
+async function sendTemplateMessage(phone, template, params = [], languageCode = 'en_US', { allowOptedOut = false } = {}) {
+  if (!allowOptedOut) await assertNotOptedOut(phone, template);
   try {
     console.log('📤 === WHATSAPP TEMPLATE MESSAGE ===');
     console.log('   Phone:', phone);

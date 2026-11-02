@@ -1,4 +1,3 @@
-const cron = require('node-cron');
 const User = require('../models/User');
 const Lesson = require('../models/Lesson');
 const SpeakingAttempt = require('../models/SpeakingAttempt');
@@ -59,7 +58,18 @@ async function sendProactiveMessage(phone, message, label) {
  * for each. That template creation is an external action - see the sprint
  * report. The logic here is fully functional once templates exist.
  */
+/**
+ * RETIRED: the plain-text Day-30 report / upgrade nudge / READY-user comeback
+ * sender. It is no longer scheduled and this entry point (also used by the admin
+ * manual trigger) never sends. Template-based retention lives in
+ * cron/retentionMessages.js (RETENTION_ENGINE_ENABLED). The original logic is
+ * kept below, unscheduled, for reference and its existing tests.
+ */
 async function runRetentionEngineJob() {
+  return { skipped: true, reason: 'retired' };
+}
+
+async function runLegacyRetentionEngineJob() {
   return runWithCronLock('retention-engine', 1800, runRetentionEngineJobInner);
 }
 
@@ -163,10 +173,6 @@ async function runRetentionEngineJobInner() {
   }
 }
 
-// Once daily at 10:00 AM IST - after the 7am lesson cron and noon reminder, so
-// a user who's about to get a normal lesson nudge isn't also hit by this run.
-cron.schedule('0 10 * * *', runRetentionEngineJob, { timezone: 'Asia/Kolkata' });
+// No cron.schedule: the plain-text retention engine is retired (see runRetentionEngineJob).
 
-console.log('⏰ Retention engine cron initialized (10:00 AM IST)');
-
-module.exports = { runRetentionEngineJob };
+module.exports = { runRetentionEngineJob, runLegacyRetentionEngineJob };

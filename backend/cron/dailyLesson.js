@@ -3,6 +3,7 @@ const User = require('../models/User');
 const { lessonQueue } = require('../config/queueConfig');
 const Log = require('../models/Log');
 const { runWithCronLock } = require('../utils/cronLock');
+const { indiaScheduleFilter, indiaScheduleDate, lessonJobOptions } = require('../services/lessonScheduling');
 
 /**
  * Daily Lesson Cron V3 - Queue-based for scalability
@@ -18,8 +19,8 @@ const { runWithCronLock } = require('../utils/cronLock');
  * - Sequential (old): 1000 users × 21s = 5.8 hours ❌
  * - Queue (new): 1000 users ÷ 15 workers × 21s = ~23 minutes ✅
  */
-cron.schedule('0 7 * * *', async () => {
-  await runWithCronLock('daily-lesson', 120, async () => {
+async function runDailyLessonJob() {
+  return runWithCronLock('daily-lesson', 120, async () => {
     const startTime = Date.now();
 
     try {
@@ -27,9 +28,13 @@ cron.schedule('0 7 * * *', async () => {
 
       // Find active users who are READY for new lesson AND not expired
       // Use lean() for faster query (read-only)
+      // With INTERNATIONAL_SCHEDULING_ENABLED, learners in other time zones are
+      // queued by cron/internationalLessonScheduler.js instead (never both).
       const users = await User.find({
+        ...(await indiaScheduleFilter()),
         isActive: true,
         state: 'READY',
+        whatsappOptOut: { $ne: true }, // STOP: no daily alert (they can still message START)
         $or: [
           { expiryDate: { $gte: new Date() } },
           { expiryDate: null }
@@ -48,20 +53,17 @@ cron.schedule('0 7 * * *', async () => {
       }
 
       // Enqueue all users to the job queue (very fast). A deterministic jobId
-      // per user+day means a duplicate cron/manual-trigger run (e.g. two
-      // backend instances both firing this schedule) cannot enqueue the same
-      // user's lesson twice - Bull silently no-ops the second add() instead
-      // of creating a second job.
+      // per user + lesson day + IST date means a duplicate cron/manual-trigger
+      // run (e.g. two backend instances both firing this schedule) cannot
+      // enqueue the same user's lesson twice that day - Bull silently no-ops
+      // the second add() - while a job retained from an earlier day can't
+      // block today's notification (see lessonJobId).
+      const scheduleDate = indiaScheduleDate();
       const jobs = [];
       for (const user of users) {
         const job = await lessonQueue.add(
           { userId: user._id.toString() },
-          {
-            jobId: `lesson-${user._id}-day${user.currentDay}`,
-            priority: 1, // Higher priority = processed first
-            removeOnComplete: 100, // Keep last 100 completed jobs
-            removeOnFail: 200, // Keep last 200 failed jobs
-          }
+          lessonJobOptions(user, scheduleDate)
         );
         jobs.push(job);
       }
@@ -89,6 +91,10 @@ cron.schedule('0 7 * * *', async () => {
       });
     }
   });
-}, {
+}
+
+cron.schedule('0 7 * * *', runDailyLessonJob, {
   timezone: 'Asia/Kolkata'
 });
+
+module.exports = { runDailyLessonJob };

@@ -16,6 +16,7 @@ jest.mock('../services/promoService', () => ({
   validatePromoCode: jest.fn()
 }));
 jest.mock('razorpay', () => jest.fn().mockImplementation(() => ({})));
+jest.mock('../services/retentionService', () => ({ recordLearnerEvent: jest.fn().mockResolvedValue(null), recordDayActiveMilestones: jest.fn().mockResolvedValue() }));
 jest.mock('../utils/whatsappDedupe', () => ({
   isDuplicateMessage: jest.fn().mockResolvedValue(false)
 }));
@@ -207,5 +208,63 @@ describe('handleWebhook - onboarding gating (state NEW)', () => {
 
     expect(handleOnboardingMessage).not.toHaveBeenCalled();
     expect(res.sendStatus).toHaveBeenCalledWith(200);
+  });
+});
+
+describe('messaging preferences: STOP / RESUME and STOP REMINDERS / START REMINDERS', () => {
+  const { sendWhatsAppMessage: send, sendTemplateMessage: sendTemplate } = require('../services/whatsappService');
+  const Lesson = require('../models/Lesson');
+  const run = async (body, user) => {
+    User.findOne.mockResolvedValue(user);
+    const res = mockRes();
+    await webhookController.handleWebhook(webhookReqWithMessage({ id: `wamid.${body}.${Math.random()}`, from: user.phone, text: { body } }), res, jest.fn());
+    return res;
+  };
+  const learner = (extra = {}) => ({ ...existingUser, isActive: true, expiryDate: new Date(Date.now() + 86400000), save: jest.fn().mockResolvedValue({}), ...extra });
+
+  beforeEach(() => jest.clearAllMocks());
+
+  test.each(['STOP', 'stop all', 'Unsubscribe'])('%s: full opt-out of proactive messages; learning state untouched', async (body) => {
+    const user = learner({ state: 'WAITING_START' });
+    const res = await run(body, user);
+    expect(user).toMatchObject({ whatsappOptOut: true, state: 'WAITING_START', currentDay: 5 });
+    expect(user.retentionOptOut).toBeUndefined(); // separate preference, not changed
+    expect(user.whatsappOptOutAt).toBeInstanceOf(Date);
+    expect(send).toHaveBeenCalledWith(user.phone, expect.stringContaining('message START any time'));
+    expect(res.sendStatus).toHaveBeenCalledWith(200);
+  });
+
+  test('RESUME re-enables proactive messages', async () => {
+    const user = learner({ whatsappOptOut: true, whatsappOptOutAt: new Date() });
+    await run('RESUME', user);
+    expect(user).toMatchObject({ whatsappOptOut: false, whatsappOptOutAt: null });
+    expect(send).toHaveBeenCalledWith(user.phone, expect.stringContaining('on again'));
+  });
+
+  test('STOP REMINDERS / START REMINDERS change only the optional retention preference', async () => {
+    const user = learner();
+    await run('STOP REMINDERS', user);
+    expect(user).toMatchObject({ retentionOptOut: true });
+    expect(user.whatsappOptOut).toBeUndefined();
+    expect(send).toHaveBeenCalledWith(user.phone, expect.stringContaining('Your daily lessons and plan notices continue'));
+    await run('START REMINDERS', user);
+    expect(user).toMatchObject({ retentionOptOut: false, retentionOptOutAt: null });
+  });
+
+  test('after STOP, START still delivers the pending lesson and DONE still completes it', async () => {
+    const user = learner({ state: 'WAITING_START', whatsappOptOut: true, currentDay: 5, streak: 2 });
+    const lesson = { lessonText: 'Day 5 lesson', status: 'notified', save: jest.fn().mockResolvedValue({}) };
+    Lesson.findOne.mockReturnValue({ sort: jest.fn().mockResolvedValue(lesson) });
+    await run('START', user);
+    expect(send).toHaveBeenCalledWith(user.phone, 'Day 5 lesson');
+    expect(user).toMatchObject({ state: 'READY', currentDay: 6, whatsappOptOut: true });
+
+    const sentLesson = { status: 'sent', save: jest.fn().mockResolvedValue({}) };
+    Lesson.findOne.mockReturnValue({ sort: jest.fn().mockResolvedValue(sentLesson) });
+    await run('DONE', user);
+    expect(sentLesson.status).toBe('completed');
+    expect(user.streak).toBe(3);
+    // the streak milestone is a direct reply to DONE, so it is allowed past the opt-out guard
+    expect(sendTemplate).toHaveBeenCalledWith(user.phone, 'streak_reminder', [user.name, '3'], 'en_US', { allowOptedOut: true });
   });
 });

@@ -42,6 +42,12 @@ async function processLessonJob(userId) {
       return { status: 'skipped', reason: 'expired', userId };
     }
 
+    // STOP: no daily alert and no lesson generated in advance. The learner keeps
+    // their day and READY state and can still message START for an on-demand lesson.
+    if (user.whatsappOptOut) {
+      return { status: 'skipped', reason: 'opted_out', userId };
+    }
+
     // Safety check: User should be in READY state
     if (user.state !== 'READY') {
       console.log(`⏭️  Skipped user in ${user.state} state: ${user.name}`);
@@ -55,12 +61,24 @@ async function processLessonJob(userId) {
     // again - avoids duplicate Lesson records and duplicate OpenAI cost,
     // and lets a Bull retry actually succeed instead of being silently
     // defeated by the not_ready guard above.
-    let lesson = await Lesson.findOne({ userId: user._id, day: user.currentDay }).sort({ generatedAt: -1 });
+    // Same level only: after a level-changing upgrade (restart at Day 1) an older
+    // Day-1 lesson from the previous level must not be reused or "repaired".
+    let lesson = await Lesson.findOne({ userId: user._id, day: user.currentDay, level: user.level }).sort({ generatedAt: -1 });
     let topicTitle;
 
     if (lesson && lesson.status === 'notified') {
+      // The notification already went out, but a crash between marking the lesson
+      // notified and saving the user left them READY. Finish that interrupted
+      // transition instead of skipping forever - no resend, no regeneration.
       console.log(`⏭️  Lesson already generated and notified for ${user.name} - Day ${user.currentDay}`);
-      return { status: 'skipped', reason: 'already_notified', userId };
+      user.state = 'WAITING_START';
+      user.lessonDate = lesson.notifiedAt || new Date();
+      user.lessonCompleted = false;
+      user.noonReminderSent = false;
+      user.eveningReminderSent = false;
+      user.lastNotificationDate = lesson.notifiedAt || new Date();
+      await user.save();
+      return { status: 'skipped', reason: 'already_notified', repairedState: true, userId };
     }
 
     if (!lesson) {

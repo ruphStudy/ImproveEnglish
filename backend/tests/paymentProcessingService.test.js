@@ -220,6 +220,49 @@ describe('processSuccessfulPayment - new user', () => {
     // isActive, state READY, expiryDate in the future.
     expect(createdUser.expiryDate).toBeInstanceOf(Date);
     expect(createdUser.expiryDate.getTime()).toBeGreaterThan(Date.now());
+    expect(createdUser.timezone).toBeUndefined(); // no zone on the order = treated as Asia/Kolkata
+  });
+
+  test('a new user gets the time zone stored on the pending order', async () => {
+    const pendingOrder = makeClaimedOrder({ status: 'created', timezone: 'America/Toronto' });
+    PendingOrder.findOneAndUpdate.mockResolvedValue(makeClaimedOrder({ status: 'processing', timezone: 'America/Toronto' }));
+    User.findOne.mockResolvedValue(null);
+    let createdUser;
+    User.mockImplementation(function (data) {
+      Object.assign(this, data);
+      this.save = jest.fn().mockResolvedValue(this);
+      createdUser = this;
+    });
+    PaymentHistory.create.mockResolvedValue({});
+
+    await processSuccessfulPayment({ pendingOrder, razorpayPaymentId: 'pay_tz', paymentMethod: 'card', amountPaidPaise: pendingOrder.amountPaise });
+    expect(createdUser.timezone).toBe('America/Toronto');
+    expect(createdUser.state).toBe('READY');
+  });
+
+  test('a renewal never re-subscribes a learner who replied STOP (or changes reminder preferences)', async () => {
+    const pendingOrder = makeClaimedOrder({ status: 'created' });
+    PendingOrder.findOneAndUpdate.mockResolvedValue(makeClaimedOrder({ status: 'processing' }));
+    const optedOutAt = new Date('2026-10-01T00:00:00Z');
+    const existingUser = makeExistingUser({ whatsappOptOut: true, whatsappOptOutAt: optedOutAt, retentionOptOut: true });
+    User.findOne.mockResolvedValue(existingUser);
+    PaymentHistory.create.mockResolvedValue({});
+
+    await processSuccessfulPayment({ pendingOrder, razorpayPaymentId: 'pay_optout', paymentMethod: 'upi', amountPaidPaise: pendingOrder.amountPaise });
+    expect(existingUser).toMatchObject({ whatsappOptOut: true, whatsappOptOutAt: optedOutAt, retentionOptOut: true, isActive: true });
+  });
+
+  test('renewal and upgrade never overwrite an existing learner time zone', async () => {
+    for (const [existingTz, level] of [['Europe/London', 'beginner'], [undefined, 'advanced']]) {
+      const pendingOrder = makeClaimedOrder({ status: 'created', level, timezone: 'America/Vancouver' });
+      PendingOrder.findOneAndUpdate.mockResolvedValue(makeClaimedOrder({ status: 'processing', level, timezone: 'America/Vancouver' }));
+      const existingUser = makeExistingUser({ timezone: existingTz });
+      User.findOne.mockResolvedValue(existingUser);
+      PaymentHistory.create.mockResolvedValue({});
+
+      await processSuccessfulPayment({ pendingOrder, razorpayPaymentId: `pay_${level}`, paymentMethod: 'upi', amountPaidPaise: pendingOrder.amountPaise });
+      expect(existingUser.timezone).toBe(existingTz);
+    }
   });
 });
 

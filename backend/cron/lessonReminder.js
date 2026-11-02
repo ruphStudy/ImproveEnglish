@@ -3,6 +3,7 @@ const User = require('../models/User');
 const Log = require('../models/Log');
 const { sendWhatsAppMessage, sendTemplateMessage } = require('../services/whatsappService');
 const { runWithCronLock } = require('../utils/cronLock');
+const { indiaScheduleFilter } = require('../services/lessonScheduling');
 
 /**
  * Lesson Reminder System - Nudge users who haven't replied START yet
@@ -50,7 +51,10 @@ async function runNoonReminderJobInner() {
     // 2. Got notification today (within 24-hour window)
     // 3. Haven't received noon reminder yet
     // 4. Are active and not expired
+    // Noon/evening are IST times: international learners (local-time lessons) are skipped while the flag is on.
     const users = await User.find({
+      ...(await indiaScheduleFilter()),
+      whatsappOptOut: { $ne: true },
       state: 'WAITING_START',
       isActive: true,
       noonReminderSent: false,
@@ -177,7 +181,10 @@ async function runEveningReminderJobInner() {
     // 2. Got notification today
     // 3. Haven't received evening reminder yet
     // 4. Are active and not expired
+    // Noon/evening are IST times: international learners (local-time lessons) are skipped while the flag is on.
     const users = await User.find({
+      ...(await indiaScheduleFilter()),
+      whatsappOptOut: { $ne: true },
       state: 'WAITING_START',
       isActive: true,
       eveningReminderSent: false,

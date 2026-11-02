@@ -62,6 +62,12 @@ const userSchema = new mongoose.Schema({
     type: String,
     default: null
   }, // Razorpay payment ID last applied to this user's subscription - guards a crashed/retried payment from double-extending expiry or resetting progress twice
+  timezone: { type: String, default: undefined }, // IANA zone chosen at registration; unset = Asia/Kolkata (utils/timezone.js). Used for scheduling only when INTERNATIONAL_SCHEDULING_ENABLED.
+  weeklySummaryDate: { type: String, default: undefined },
+  retentionOptOut: { type: Boolean, default: false }, // STOP REMINDERS: no optional retention messages (lessons, same-day and expiry reminders continue)
+  whatsappOptOut: { type: Boolean, default: false }, // STOP / STOP ALL / UNSUBSCRIBE: no business-initiated template messages at all (RESUME re-enables); learner-initiated replies continue
+  whatsappOptOutAt: { type: Date, default: null },
+  retentionOptOutAt: { type: Date, default: null }, // local Sunday (YYYY-MM-DD) of the last international weekly run for this user - dedupe
   freeActivationId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'FreeActivation',
@@ -102,6 +108,9 @@ userSchema.index({ isActive: 1, state: 1, lastNotificationDate: 1 });
 
 // Index for expiry reminder queries
 userSchema.index({ isActive: 1, expiryDate: 1 });
+
+// Time-zone split between the IST cron and the international scheduler
+userSchema.index({ timezone: 1, state: 1 });
 
 // Index for phone (already unique, but explicit for lookups)
 userSchema.index({ phone: 1 });

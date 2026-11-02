@@ -21,9 +21,9 @@ export function promoResetAction(field) {
 }
 
 /** Body for POST /api/payments/activate-free - deliberately carries no amount. */
-export function buildFreeActivationPayload(formData, promo) {
+export function buildFreeActivationPayload(formData, promo, timezone) {
   const { name, phone, country, email, level, planDuration } = formData;
-  return { name, phone, country, email, level, planDuration, promoCode: promo.code };
+  return { name, phone, country, email, level, planDuration, promoCode: promo.code, timezone };
 }
 
 const FRIENDLY_ERRORS = [
@@ -57,20 +57,35 @@ export async function runExclusive(ref, fn) {
   }
 }
 
+import { nextLocalSevenAm, timezoneCity } from './timezone.js';
+
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 
-/** Next 7:00 AM India time - when the daily lesson job sends lessons. */
-export function nextLessonDelivery(now = new Date()) {
+const isLocalSchedule = (timezone, localScheduling) => localScheduling && !!timezone && timezone !== 'Asia/Kolkata';
+
+/**
+ * When the first daily lesson notification is scheduled: next 7:00 AM in the
+ * learner's zone when the backend schedules locally, otherwise 7:00 AM India time.
+ */
+export function nextLessonDelivery(now = new Date(), timezone, localScheduling = false) {
+  if (isLocalSchedule(timezone, localScheduling)) return nextLocalSevenAm(now, timezone);
   const ist = new Date(now.getTime() + IST_OFFSET_MS);
   let next = Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate(), 7, 0) - IST_OFFSET_MS;
   if (next <= now.getTime()) next += 24 * 60 * 60 * 1000;
   return new Date(next);
 }
 
-export function formatLessonDelivery(date) {
-  return `${date.toLocaleString('en-IN', {
-    timeZone: 'Asia/Kolkata', weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit'
-  })} (India time)`;
+const DELIVERY_FORMAT = { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' };
+
+/** Scheduled time in the learner's zone (local scheduling), or India time plus the local equivalent. */
+export function formatLessonDelivery(date, timezone, localScheduling = false) {
+  if (isLocalSchedule(timezone, localScheduling)) {
+    return `${date.toLocaleString('en-IN', { timeZone: timezone, ...DELIVERY_FORMAT })} (${timezoneCity(timezone)} time)`;
+  }
+  const india = `${date.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', ...DELIVERY_FORMAT })} (India time)`;
+  if (!timezone || timezone === 'Asia/Kolkata') return india;
+  const city = timezone.split('/').pop().replace(/_/g, ' ');
+  return `${india} = ${date.toLocaleString('en-IN', { timeZone: timezone, ...DELIVERY_FORMAT })} (${city} time)`;
 }
 
 export function levelLabel(level) {
@@ -84,7 +99,7 @@ export function levelLabel(level) {
  * ever says "delivered" - and skipped/failed never claim a message was sent.
  */
 export function welcomeNotice(status, { phone, firstLesson }) {
-  const lesson = `Your first lesson notification will arrive on WhatsApp at ${firstLesson}.`;
+  const lesson = `Your first lesson notification is scheduled for ${firstLesson}.`;
   switch (status) {
     case 'accepted':
       return {

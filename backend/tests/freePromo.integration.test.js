@@ -79,6 +79,7 @@ describeDb('free beta activation (real MongoDB)', () => {
     await Promise.allSettled([User.init(), PromoCode.init(), FreeActivation.init(), PaymentHistory.init()]);
 
     const app = express();
+    app.set('trust proxy', 1); // as in server.js
     app.use(express.json());
     app.use('/api/payments', require('../routes/paymentRoutes'));
     app.use('/api/promo', require('../routes/promoRoutes'));
@@ -90,9 +91,13 @@ describeDb('free beta activation (real MongoDB)', () => {
   afterAll(async () => {
     if (server) { server.closeAllConnections(); await new Promise(r => server.close(r)); }
     await mongoose.disconnect().catch(() => {});
-    if (mongod) mongod.kill('SIGTERM');
-    await new Promise(r => setTimeout(r, 300));
-    fs.rmSync(dbPath, { recursive: true, force: true });
+    if (mongod) {
+      // wait for mongod to exit (it keeps writing while shutting down), then clean up
+      const exited = new Promise(r => mongod.once('exit', r));
+      mongod.kill('SIGTERM');
+      await Promise.race([exited, new Promise(r => setTimeout(r, 5000))]);
+    }
+    fs.rmSync(dbPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   });
 
   beforeEach(async () => {
@@ -338,7 +343,13 @@ describeDb('free beta activation (real MongoDB)', () => {
   });
 
   describe('HTTP endpoints', () => {
-    const post = (p, body) => fetch(baseUrl + p, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    // A distinct client IP per request keeps the per-IP rate limiters out of these tests.
+    let clientIp = 0;
+    const post = (p, body) => fetch(baseUrl + p, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': `10.0.${(++clientIp >> 8) & 255}.${clientIp & 255}` },
+      body: JSON.stringify(body)
+    });
 
     test('Canadian learner activates via /activate-free and is stored in WhatsApp format', async () => {
       await seedPromo();
@@ -349,12 +360,68 @@ describeDb('free beta activation (real MongoDB)', () => {
       expect(await User.findOne({ phone: '14165550123' })).toMatchObject({ state: 'READY' });
     });
 
+    test('/payments/config reports local lesson scheduling only when the backend flag is on', async () => {
+      const get = async () => (await fetch(`${baseUrl}/api/payments/config`)).json();
+      expect((await get()).localLessonScheduling).toBe(false);
+      process.env.INTERNATIONAL_SCHEDULING_ENABLED = 'true';
+      expect((await get()).localLessonScheduling).toBe(true);
+      delete process.env.INTERNATIONAL_SCHEDULING_ENABLED;
+    });
+
     const activate = async (phone) => {
       const res = await post('/api/payments/activate-free', {
         name: 'Asha', email: 'asha@example.com', phone, country: 'IN', level: 'beginner', planDuration: 30, promoCode: 'BETA100'
       });
       return { status: res.status, body: await res.json() };
     };
+
+    const activateWith = async (body) => {
+      const res = await post('/api/payments/activate-free', {
+        name: 'Asha', email: 'asha@example.com', level: 'beginner', planDuration: 30, promoCode: 'BETA100', ...body
+      });
+      return { status: res.status, body: await res.json() };
+    };
+
+    test.each([
+      ['4165550101', 'CA', 'America/Toronto', '14165550101'],
+      ['6045550102', 'CA', 'America/Vancouver', '16045550102'],
+      ['07400 123401', 'GB', 'Europe/London', '447400123401'],
+      ['9876501101', 'IN', 'Asia/Calcutta', '919876501101'] // legacy browser name is stored as Asia/Kolkata
+    ])('free activation stores the browser time zone (%s %s %s)', async (phone, country, timezone, stored) => {
+      await seedPromo();
+      const res = await activateWith({ phone, country, timezone });
+      expect(res.status).toBe(200);
+      const expected = timezone === 'Asia/Calcutta' ? 'Asia/Kolkata' : timezone;
+      expect((await User.findOne({ phone: stored })).timezone).toBe(expected);
+      expect((await FreeActivation.findOne({ phone: stored })).timezone).toBe(expected);
+    });
+
+    test('missing browser detection: single-zone country falls back, multi-zone country stays unset (treated as IST)', async () => {
+      await seedPromo();
+      await activateWith({ phone: '9876501102', country: 'IN' });
+      await activateWith({ phone: '4165550103', country: 'CA' });
+      expect((await User.findOne({ phone: '919876501102' })).timezone).toBe('Asia/Kolkata');
+      expect((await User.findOne({ phone: '14165550103' })).timezone).toBeUndefined();
+    });
+
+    test('an invalid time zone is rejected before anything is reserved or created', async () => {
+      await seedPromo();
+      const res = await activateWith({ phone: '9876501103', country: 'IN', timezone: 'Mars/Phobos' });
+      expect(res.status).toBe(400);
+      expect(res.body.message).toMatch(/time zone/);
+      expect(await User.exists({ phone: '919876501103' })).toBeNull();
+      expect(await FreeActivation.exists({ phone: '919876501103' })).toBeNull();
+      expect((await PromoCode.findOne({ code: 'BETA100' })).currentUses).toBe(0);
+    });
+
+    test('a duplicate activation keeps the original time zone', async () => {
+      await seedPromo();
+      await activateWith({ phone: '4165550104', country: 'CA', timezone: 'America/Toronto' });
+      const retry = await activateWith({ phone: '4165550104', country: 'CA', timezone: 'America/Vancouver' });
+      expect(retry.body).toMatchObject({ success: true, alreadyActivated: true });
+      expect((await User.findOne({ phone: '14165550104' })).timezone).toBe('America/Toronto');
+      expect(await User.countDocuments({ phone: '14165550104' })).toBe(1);
+    });
 
     test('without a template the API says the welcome was not sent - including on retries', async () => {
       await seedPromo();

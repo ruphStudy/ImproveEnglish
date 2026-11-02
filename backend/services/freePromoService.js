@@ -188,7 +188,8 @@ async function ensureUser(activation) {
       lessonText: '',
       lessonCompleted: false,
       expiryDate: computeExtendedExpiry(null, activation.planDuration),
-      freeActivationId: activation._id
+      freeActivationId: activation._id,
+      timezone: activation.timezone || undefined
     });
     return { user };
   } catch (err) {
@@ -229,7 +230,7 @@ function activatedResult(activation, alreadyActivated) {
  * Activates a free-beta subscription. `phone` must already be normalized.
  * Safe to call repeatedly/concurrently for the same phone + code.
  */
-async function activateFreePromo({ name, email, phone, level, planDuration, code }) {
+async function activateFreePromo({ name, email, phone, level, planDuration, code, timezone }) {
   const promoCode = String(code || '').toUpperCase().trim();
   const days = Number(planDuration);
 
@@ -252,7 +253,7 @@ async function activateFreePromo({ name, email, phone, level, planDuration, code
       }
     } else {
       // Create (or, after a rejection, re-open) the single activation doc for this phone+code.
-      const fields = { name, email, level, planDuration: days, listPriceInr: quote.originalAmount };
+      const fields = { name, email, level, planDuration: days, listPriceInr: quote.originalAmount, timezone };
       try {
         await FreeActivation.create({ promoCode, phone, ...fields, status: 'reserved' });
       } catch (err) {

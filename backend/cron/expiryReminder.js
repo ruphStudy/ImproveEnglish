@@ -3,6 +3,15 @@ const User = require('../models/User');
 const { sendTemplateMessage } = require('../services/whatsappService');
 const Log = require('../models/Log');
 const { runWithCronLock } = require('../utils/cronLock');
+const { indiaScheduleFilter } = require('../services/lessonScheduling');
+const LearnerEvent = require('../models/LearnerEvent');
+
+// Lets the retention job avoid a second optional/account message the same day.
+function recordExpiryReminder(user, kind) {
+  return LearnerEvent.create({
+    userId: user._id, type: 'EXPIRY_REMINDER_SENT', dedupeKey: `${kind}-${new Date(user.expiryDate).toISOString()}`, metadata: { status: 'accepted', kind }
+  }).catch(() => {});
+}
 
 /**
  * Expiry Reminder Cron - Runs daily at 9:00 AM IST
@@ -24,9 +33,14 @@ async function runExpiryReminderJobInner() {
     today.setHours(0, 0, 0, 0); // Start of today
     
     // Find active users whose subscription hasn't expired yet
+    // Still active at this instant: a plan that expired earlier today (before the
+    // midnight deactivation cron) must not get an "expires soon" reminder.
+    // International learners use cron/internationalNotifications.js when the flag is on.
     const activeUsers = await User.find({
+      ...(await indiaScheduleFilter()),
       isActive: true,
-      expiryDate: { $gte: today }
+      whatsappOptOut: { $ne: true },
+      expiryDate: { $gte: today, $gt: new Date() }
     });
     
     console.log(`📋 Found ${activeUsers.length} active users to check for expiry reminders`);
@@ -55,6 +69,7 @@ async function runExpiryReminderJobInner() {
             
             user.sevenDayReminderSent = true;
             await user.save();
+            await recordExpiryReminder(user, '7day');
             
             sevenDayReminders++;
             
@@ -95,6 +110,7 @@ async function runExpiryReminderJobInner() {
             
             user.threeDayReminderSent = true;
             await user.save();
+            await recordExpiryReminder(user, '3day');
             
             threeDayReminders++;
             

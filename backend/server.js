@@ -80,4 +80,7 @@ require('./cron/expiryReminder');
 require('./cron/streakReset');
 require('./cron/weeklySummary');
 require('./cron/lessonReminder');
-require('./cron/retentionEngine');
+require('./cron/internationalLessonScheduler'); // no-op unless INTERNATIONAL_SCHEDULING_ENABLED=true
+require('./cron/internationalLessonReminders'); // no-op unless INTERNATIONAL_SCHEDULING_ENABLED=true
+require('./cron/internationalNotifications'); // weekly + expiry; no-op unless INTERNATIONAL_SCHEDULING_ENABLED=true
+require('./cron/retentionMessages'); // template retention; no-op unless RETENTION_ENGINE_ENABLED=true

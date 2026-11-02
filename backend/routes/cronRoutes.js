@@ -5,6 +5,7 @@ const CurriculumTopic = require('../models/CurriculumTopic');
 const TutorMemory = require('../models/TutorMemory');
 const Lesson = require('../models/Lesson');
 const { generateLesson } = require('../services/lessonGeneratorV2');
+const { indiaScheduleFilter, indiaScheduleDate, lessonJobOptions } = require('../services/lessonScheduling');
 const { sendTemplateMessage } = require('../services/whatsappService');
 const Log = require('../models/Log');
 const { runExpiryReminderJob } = require('../cron/expiryReminder');
@@ -29,9 +30,11 @@ const triggerDailyLesson = async (req, res) => {
     console.log('🔧 Manual cron trigger V3 started (Queue-based)...');
     const startTime = Date.now();
     
-    // Find active users who are READY
+    // Find active users who are READY (IST path only - same split as the 7am cron)
     const users = await User.find({ 
+      ...(await indiaScheduleFilter()),
       isActive: true,
+      whatsappOptOut: { $ne: true },
       state: 'READY',
       $or: [
         { expiryDate: { $gte: new Date() } },
@@ -58,18 +61,11 @@ const triggerDailyLesson = async (req, res) => {
     
     // Enqueue all users to Bull Queue. Same deterministic jobId scheme as the
     // scheduled cron so a manual trigger can never double-enqueue a user who
-    // is already queued/generated for their current day.
+    // is already queued/generated for their current day (attempts/backoff come
+    // from the queue defaults: 3, exponential 5s).
+    const scheduleDate = indiaScheduleDate();
     const jobPromises = users.map(user =>
-      lessonQueue.add(
-        { userId: user._id.toString() },
-        {
-          jobId: `lesson-${user._id}-day${user.currentDay}`,
-          attempts: 3,
-          backoff: { type: 'exponential', delay: 5000 },
-          removeOnComplete: 100,
-          removeOnFail: 200
-        }
-      )
+      lessonQueue.add({ userId: user._id.toString() }, lessonJobOptions(user, scheduleDate))
     );
     
     await Promise.all(jobPromises);

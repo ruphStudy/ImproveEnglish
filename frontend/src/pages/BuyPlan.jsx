@@ -3,6 +3,7 @@ import { useSearchParams, useNavigate } from 'react-router-dom';
 import { createOrder, getOrderStatus, getPlans, getPaymentConfig, validatePromo, activateFree } from '../api';
 import Footer from '../components/Footer';
 import { checkPhone } from '../utils/phone';
+import { detectBrowserTimezone, resolveTimezone, timezoneOptions, timezoneCity, lessonTimeLabel } from '../utils/timezone';
 import {
   isPlanEligible,
   checkoutMode,
@@ -68,6 +69,7 @@ export default function BuyPlan() {
   const [processingPayment, setProcessingPayment] = useState(false);
   const [orderId, setOrderId] = useState(null);
   const [testMode, setTestMode] = useState(false);
+  const [localScheduling, setLocalScheduling] = useState(false); // backend INTERNATIONAL_SCHEDULING_ENABLED
   const [promoInput, setPromoInput] = useState('');
   const [promo, setPromo] = useState(null); // server quote for the applied code + selected plan
   const [offer, setOffer] = useState(null); // { code, applicableDurations } of the applied free code
@@ -76,11 +78,17 @@ export default function BuyPlan() {
   const promoRequestRef = useRef(0); // ignores responses for an outdated form state
   const [promoChecking, setPromoChecking] = useState(false);
   const [freeActivated, setFreeActivated] = useState(null);
+  const [detectedTimezone] = useState(() => detectBrowserTimezone());
+  const [chosenTimezone, setChosenTimezone] = useState('');
+  const [showTimezonePicker, setShowTimezonePicker] = useState(false);
   const submittingRef = useRef(false); // blocks double submission even before re-render
 
   useEffect(() => {
     getPaymentConfig()
-      .then((res) => setTestMode(!!res.data.razorpayTestMode))
+      .then((res) => {
+        setTestMode(!!res.data.razorpayTestMode);
+        setLocalScheduling(!!res.data.localLessonScheduling);
+      })
       .catch(() => {});
   }, []);
 
@@ -177,7 +185,8 @@ export default function BuyPlan() {
         if (response.data.userActivated) {
           setProcessingPayment(false);
           // Show success message
-          alert(`🎉 Success! Your account has been activated!\n\nYou'll receive your first lesson tomorrow at 7:00 AM.\n\nCheck your WhatsApp for a welcome message!`);
+          const firstLesson = formatLessonDelivery(nextLessonDelivery(new Date(), tz.timezone, localScheduling), tz.timezone, localScheduling);
+          alert(`🎉 Success! Your account has been activated!\n\nYour first lesson notification is scheduled for ${firstLesson}.\n\nCheck your WhatsApp for a welcome message!`);
           // Stay on localhost for development
           window.location.href = '/buy?plan=30';
         } else if (attempts >= maxAttempts) {
@@ -267,10 +276,18 @@ export default function BuyPlan() {
       setError('Please enter a valid email address');
       return false;
     }
+    if (!tz.timezone) {
+      setShowTimezonePicker(true);
+      setError('Please choose your time zone');
+      return false;
+    }
     return true;
   };
 
   const selectedCountry = COUNTRIES.find(c => c.code === formData.country) || COUNTRIES[0];
+  // Learner's choice > browser detection > unambiguous country; never the phone code alone.
+  const tz = resolveTimezone({ chosen: chosenTimezone, detected: detectedTimezone, country: formData.country });
+  const timezoneChoices = timezoneOptions(formData.country, tz.timezone);
 
   const validatePhone = () => {
     const { error: msg } = checkPhone(formData.phone, formData.country, selectedCountry.name);
@@ -355,7 +372,7 @@ export default function BuyPlan() {
       try {
         // Only the existing free endpoint - never a Razorpay order. Safe to
         // retry: the backend makes repeated requests for the same number + code idempotent.
-        const res = await activateFree(buildFreeActivationPayload(formData, promo));
+        const res = await activateFree(buildFreeActivationPayload(formData, promo, tz.timezone));
         // Server values are authoritative (a retry returns the original activation).
         setFreeActivated({
           name: formData.name.trim(),
@@ -365,7 +382,9 @@ export default function BuyPlan() {
           expiryDate: res.data.expiryDate,
           welcomeStatus: res.data.welcomeStatus,
           alreadyActivated: !!res.data.alreadyActivated,
-          firstLesson: nextLessonDelivery()
+          firstLesson: nextLessonDelivery(new Date(), tz.timezone, localScheduling),
+          localScheduling,
+          timezone: tz.timezone
         });
         window.scrollTo({ top: 0, behavior: 'smooth' });
       } catch (err) {
@@ -395,7 +414,7 @@ export default function BuyPlan() {
 
     try {
       // Create order
-      const response = await createOrder(formData);
+      const response = await createOrder({ ...formData, timezone: tz.timezone });
       const { keyId, orderId: razorpayOrderId, amountPaise, currency } = response.data;
 
       setOrderId(razorpayOrderId);
@@ -541,6 +560,44 @@ export default function BuyPlan() {
                       ? `${selectedCountry.name} (+${selectedCountry.dial}). Enter the number without the country code. Country not listed? Choose Other.`
                       : 'Type the full number starting with + and the country code.'}
                   </p>
+                </div>
+
+                {/* Time zone: detected automatically, optional correction */}
+                <div className="text-sm text-gray-700">
+                  {tz.timezone ? (
+                    <p className="flex flex-wrap items-center gap-x-2">
+                      <span aria-hidden="true">🕖</span>
+                      <span>Your daily lesson: <strong>{lessonTimeLabel(tz.timezone, nextLessonDelivery(), localScheduling)}</strong></span>
+                      <button
+                        type="button"
+                        onClick={() => setShowTimezonePicker(v => !v)}
+                        aria-expanded={showTimezonePicker}
+                        aria-controls="timezone"
+                        className="text-blue-600 underline hover:text-blue-800"
+                      >
+                        Change
+                      </button>
+                    </p>
+                  ) : (
+                    <p className="text-amber-700">We could not detect your time zone. Please choose it below.</p>
+                  )}
+                  {(showTimezonePicker || tz.needsChoice) && (
+                    <select
+                      id="timezone"
+                      aria-label="Time zone"
+                      value={tz.timezone || ''}
+                      onChange={(e) => setChosenTimezone(e.target.value)}
+                      className="mt-2 w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    >
+                      {!tz.timezone && <option value="" disabled>Choose your time zone</option>}
+                      <optgroup label={selectedCountry.code ? selectedCountry.name : 'Suggested'}>
+                        {timezoneChoices.preferred.map(z => <option key={z} value={z}>{z.replace(/_/g, ' ')}</option>)}
+                      </optgroup>
+                      <optgroup label="All time zones">
+                        {timezoneChoices.others.map(z => <option key={z} value={z}>{z.replace(/_/g, ' ')}</option>)}
+                      </optgroup>
+                    </select>
+                  )}
                 </div>
 
                 {/* Promo code (optional) - above plan selection; needs the WhatsApp number */}
@@ -809,7 +866,8 @@ const NOTICE_STYLES = {
 
 // Replaces the form and pricing after a free activation.
 function FreeActivationSuccess({ activation }) {
-  const firstLesson = formatLessonDelivery(activation.firstLesson);
+  const firstLesson = formatLessonDelivery(activation.firstLesson, activation.timezone, activation.localScheduling);
+  const sendTime = lessonTimeLabel(activation.timezone, activation.firstLesson, activation.localScheduling);
   const notice = welcomeNotice(activation.welcomeStatus, { phone: activation.phone, firstLesson });
   const expiry = activation.expiryDate
     ? new Date(activation.expiryDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })
@@ -820,10 +878,11 @@ function FreeActivationSuccess({ activation }) {
     ['Plan', `${activation.planDuration} days`],
     ['Paid', '₹0'],
     ...(expiry ? [['Valid until', expiry]] : []),
-    ['First lesson', firstLesson]
+    ...(activation.timezone ? [['Time zone', timezoneCity(activation.timezone)]] : []),
+    ['First lesson notification', firstLesson]
   ];
   const steps = [
-    ['Get the WhatsApp notification', 'Every morning at 7:00 AM (India time), we send a lesson notification.'],
+    ['Get the WhatsApp notification', `Every morning from ${sendTime}, we send a lesson notification. It can take a few minutes to arrive.`],
     ['Reply START', 'Your lesson for the day arrives right away.'],
     ['Do the lesson', 'Read, speak the conversation aloud and practise. Voice notes are welcome.'],
     ['Reply DONE', 'This completes the day. Your next lesson comes the next morning.']

@@ -3,6 +3,7 @@ const User = require('../models/User');
 const { sendTemplateMessage } = require('../services/whatsappService');
 const Log = require('../models/Log');
 const { runWithCronLock } = require('../utils/cronLock');
+const { indiaScheduleFilter } = require('../services/lessonScheduling');
 const { getWeeklyActivityStats, hadWeeklyActivity } = require('../services/retentionService');
 
 /**
@@ -33,7 +34,8 @@ async function runWeeklySummaryJobInner() {
   try {
     console.log('📊 Weekly summary cron started at 6:00 PM Sunday');
 
-    const users = await User.find({ isActive: true });
+    // International learners use cron/internationalNotifications.js when the flag is on.
+    const users = await User.find({ ...(await indiaScheduleFilter()), isActive: true, whatsappOptOut: { $ne: true } });
     console.log(`📋 Checking ${users.length} active users for weekly activity`);
 
     const sinceDate = new Date(Date.now() - ONE_WEEK_MS);

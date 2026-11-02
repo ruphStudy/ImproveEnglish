@@ -90,7 +90,8 @@ async function processSuccessfulPayment({ pendingOrder, razorpayPaymentId, payme
           lessonText: '',
           lessonCompleted: false,
           expiryDate: newExpiryDate,
-          lastAppliedPaymentId: razorpayPaymentId
+          lastAppliedPaymentId: razorpayPaymentId,
+          timezone: claimed.timezone || undefined // new users only; renewals keep their own
         });
       } else {
         existingUser.isActive = true;

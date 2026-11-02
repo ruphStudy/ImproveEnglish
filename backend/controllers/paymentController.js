@@ -7,6 +7,7 @@ const whatsappService = require('../services/whatsappService');
 const PlanMaster = require('../models/PlanMaster');
 const { processSuccessfulPayment, reconcileStuckPendingOrders } = require('../services/paymentProcessingService');
 const { normalizePhone } = require('../utils/phone');
+const { resolveRegistrationTimezone } = require('../utils/timezone');
 
 // Initialize Razorpay
 const razorpay = new Razorpay({
@@ -23,14 +24,19 @@ const LEVEL_MAP = {
 
 // Public, non-secret checkout config (lets the UI label Razorpay Test Mode)
 exports.getPublicConfig = (req, res) => {
-  res.json({ success: true, razorpayTestMode: String(process.env.RAZORPAY_KEY_ID || '').startsWith('rzp_test_') });
+  res.json({
+    success: true,
+    razorpayTestMode: String(process.env.RAZORPAY_KEY_ID || '').startsWith('rzp_test_'),
+    // The page may promise 7:00 AM local time only while the backend actually schedules it.
+    localLessonScheduling: process.env.INTERNATIONAL_SCHEDULING_ENABLED === 'true'
+  });
 };
 
 // Free beta activation (100% promo) - no Razorpay order or payment is created.
 // Price and every promo rule are re-checked server-side in freePromoService.
 exports.activateFree = async (req, res) => {
   try {
-    const { name, phone, country, email, level, planDuration, promoCode } = req.body || {};
+    const { name, phone, country, email, level, planDuration, promoCode, timezone } = req.body || {};
     if (!name || !phone || !email || !level || !planDuration || !promoCode) {
       return res.status(400).json({
         success: false,
@@ -41,6 +47,8 @@ exports.activateFree = async (req, res) => {
     if (!normalizedPhone) {
       return res.status(400).json({ success: false, message: 'Please enter a valid WhatsApp number for the selected country' });
     }
+    const tz = resolveRegistrationTimezone(timezone, country);
+    if (tz.error) return res.status(400).json({ success: false, message: tz.error });
 
     const { activateFreePromo, publicWelcomeStatus } = require('../services/freePromoService');
     const result = await activateFreePromo({
@@ -49,7 +57,8 @@ exports.activateFree = async (req, res) => {
       phone: normalizedPhone,
       level,
       planDuration,
-      code: promoCode
+      code: promoCode,
+      timezone: tz.timezone
     });
 
     if (!result.ok) {
@@ -74,7 +83,7 @@ exports.activateFree = async (req, res) => {
 // Create Razorpay Order
 exports.createOrder = async (req, res) => {
   try {
-    const { name, phone, country, email, level, planDuration, utmSource } = req.body;
+    const { name, phone, country, email, level, planDuration, utmSource, timezone } = req.body;
 
     // Validation
     if (!name || !phone || !email || !level || !planDuration) {
@@ -100,6 +109,8 @@ exports.createOrder = async (req, res) => {
         message: 'Please enter a valid WhatsApp number for the selected country'
       });
     }
+    const tz = resolveRegistrationTimezone(timezone, country);
+    if (tz.error) return res.status(400).json({ success: false, message: tz.error });
 
     // Map level to database format
     const dbLevel = LEVEL_MAP[level];
@@ -144,7 +155,8 @@ exports.createOrder = async (req, res) => {
       planDuration,
       amountPaise,
       status: 'created',
-      utmSource: utmSource || null
+      utmSource: utmSource || null,
+      timezone: tz.timezone
     });
 
     await pendingOrder.save();
@@ -333,7 +345,8 @@ exports.handleWebhook = async (req, res) => {
             pendingOrder.phone,
             'payment_welcome_new',
             [user.name, pendingOrder.planDuration.toString(), pendingOrder.level, formattedExpiryDate],
-            'en_US'
+            'en_US',
+            { allowOptedOut: true } // confirms the purchase the learner just made; does not re-subscribe them
           );
           // No onboarding kickoff: new paid users are READY and get lessons from the next 7 AM run.
         } else {

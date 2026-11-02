@@ -72,7 +72,8 @@ const pendingOrderSchema = new mongoose.Schema({
   utmSource: {
     type: String,
     default: null
-  }
+  },
+  timezone: { type: String, default: undefined } // validated IANA zone, copied to a NEW user only
 }, {
   timestamps: true
 });

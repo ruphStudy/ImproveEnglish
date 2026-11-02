@@ -38,7 +38,10 @@ const {
   canSendUpgradeNudge
 } = require('../services/retentionService');
 
-const { runRetentionEngineJob } = require('../cron/retentionEngine');
+// The plain-text engine is retired: its scheduled/manual entry point never sends.
+// The original logic is still exercised directly through runLegacyRetentionEngineJob.
+const { runRetentionEngineJob: runRetiredEntryPoint, runLegacyRetentionEngineJob: runRetentionEngineJob } = require('../cron/retentionEngine');
+const cron = require('node-cron');
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 function daysAgo(n) { return new Date(Date.now() - n * ONE_DAY_MS); }
@@ -225,5 +228,25 @@ describe('runRetentionEngineJob - comeback fallback', () => {
 
     expect(result.errors).toBe(1);
     expect(result.comebackSent).toBe(1);
+  });
+});
+
+describe('retired plain-text retention engine', () => {
+  test('is never scheduled and its entry point sends nothing, whatever RETENTION_ENGINE_ENABLED is', async () => {
+    expect(cron.schedule).not.toHaveBeenCalled();
+    for (const flag of [undefined, 'false', 'true']) {
+      if (flag === undefined) delete process.env.RETENTION_ENGINE_ENABLED; else process.env.RETENTION_ENGINE_ENABLED = flag;
+      jest.clearAllMocks();
+      expect(await runRetiredEntryPoint()).toEqual({ skipped: true, reason: 'retired' });
+      expect(User.find).not.toHaveBeenCalled();
+      expect(sendWhatsAppMessage).not.toHaveBeenCalled();
+    }
+    delete process.env.RETENTION_ENGINE_ENABLED;
+  });
+
+  test('server.js no longer loads it as a cron job', () => {
+    const server = require('fs').readFileSync(require('path').join(__dirname, '..', 'server.js'), 'utf8');
+    expect(server).not.toContain("require('./cron/retentionEngine')");
+    expect(server).toContain("require('./cron/retentionMessages')");
   });
 });
