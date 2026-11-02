@@ -2,6 +2,14 @@ const openai = require('../config/openai');
 const Log = require('../models/Log');
 const { trackOpenAI } = require('../utils/aiUsageTracker');
 const { getScenarioFamily, getGoalContextLabel } = require('./onboardingService');
+const {
+  getBeginnerStage,
+  getBeginnerLessonRules,
+  buildBeginnerGuidance,
+  findBeginnerDifficultyIssues,
+  getBeginnerScenario
+} = require('./beginnerProgression');
+const { buildBeginnerFallbackJson } = require('./beginnerFallbackLessons');
 
 const GENERATION_VERSION = 'v3';
 
@@ -14,6 +22,21 @@ const REQUIRED_CONVERSATION_PREFIX = '🔊 Speak this conversation aloud slowly 
 const RECENT_VOCAB_CONTEXT_LIMIT = 12; // only recent-enough words are useful anti-repetition context
 const RECENT_SCENARIO_CONTEXT_LIMIT = 5;
 const VOCAB_OVERLAP_RETRY_THRESHOLD = 0.5; // >=50% of today's "new" words already recently taught
+
+const DEFAULT_LESSON_RULES = {
+  conversationWordRange: CONVERSATION_WORD_RANGE,
+  explanationWordRange: EXPLANATION_WORD_RANGE,
+  speakingPrompts: [TARGET_SPEAKING_PROMPTS, TARGET_SPEAKING_PROMPTS],
+  vocabCount: [TARGET_VOCAB_COUNT, TARGET_VOCAB_COUNT]
+};
+
+function isBeginner(user) {
+  return user.level === 'beginner';
+}
+
+function getLessonRules(user) {
+  return isBeginner(user) ? getBeginnerLessonRules(user.currentDay) : DEFAULT_LESSON_RULES;
+}
 
 // ============================================================================
 // PART 1: SYSTEM PROMPT (constant, level-agnostic - level detail lives in the
@@ -48,6 +71,36 @@ RULES:
   "confidenceLine": "..."
 }
 `.trim();
+
+// Beginner-only system prompt: sizes and difficulty come from the day's stage
+// in the user prompt (see beginnerProgression.js), so nothing here conflicts.
+const BEGINNER_SYSTEM_PROMPT = `
+You are a friendly English tutor writing ONE short WhatsApp lesson for a beginner adult learner.
+
+RULES:
+1. Simple, natural, everyday spoken English. Short sentences. Respectful of adults - never childish.
+2. Conversation field MUST start with exactly: "${REQUIRED_CONVERSATION_PREFIX}" then a short "A:"/"B:" dialogue, one line per turn.
+3. Explanation = today's ONE pattern as short fill-in lines (e.g. "My name is ___.") with at most one plain sentence. No grammar terms.
+4. Follow the given topic and the stage rules in the user message exactly - never invent a different or harder topic.
+5. Vocabulary: common, useful words. Meanings in very simple words; short examples.
+6. Use the student's name at most once. Be warm and brief.
+7. Return ONLY valid JSON, no commentary, matching exactly this shape (array lengths as the user message says):
+
+{
+  "title": "...",
+  "scenarioType": "...",
+  "conversation": "${REQUIRED_CONVERSATION_PREFIX}\\n\\nA: ...\\nB: ...",
+  "explanation": "...",
+  "guidedSpeakingPrompts": ["..."],
+  "newVocabulary": [{"word":"...", "meaning":"...", "example":"..."}],
+  "microPractice": {"q1": "...", "q2": "..."},
+  "confidenceLine": "..."
+}
+`.trim();
+
+function getSystemPrompt(user) {
+  return isBeginner(user) ? BEGINNER_SYSTEM_PROMPT : SYSTEM_PROMPT;
+}
 
 // ============================================================================
 // PART 2: LEVEL-SPECIFIC GUIDANCE (injected once, into the user prompt only)
@@ -89,6 +142,28 @@ function buildUserPrompt(user, topic, tutorMemory, scenarioType) {
     ? tutorMemory.weakAreas.join(', ')
     : 'None identified yet';
 
+  if (isBeginner(user)) {
+    // Anti-repetition is softened for beginners: pushing away from recent
+    // simple patterns/words otherwise drives the AI toward harder ones.
+    const foundation = getBeginnerStage(user.currentDay).strictWords;
+    return `
+Student: ${user.name} | Level: beginner | Day: ${user.currentDay}
+Topic: ${topic.title} | Grammar focus: ${topic.grammarFocus} | Difficulty: ${topic.difficultyTag} | Scenario: ${scenarioType}
+
+${buildBeginnerGuidance(user.currentDay)}
+
+Learner's goal context${foundation ? ' - use only if it fits naturally in simple words' : ' - bias the situation toward this, but KEEP today\'s topic and grammar focus'}: ${getGoalContextLabel(user.learningGoal)}
+
+Recent topics (days): ${recentTopics}
+Recent patterns (simple ones may be reused - never switch to harder grammar to avoid repeating): ${recentGrammar}
+Recent words (prefer other common everyday words - never rare ones): ${recentVocab}
+Recently used scenario types (vary the specific situation): ${recentScenarios}
+Gently reinforce, in simple words: ${weakAreas}
+
+Generate the lesson JSON now.
+    `.trim();
+  }
+
   return `
 Student: ${user.name} | Level: ${user.level} | Day: ${user.currentDay}
 Topic: ${topic.title} | Grammar focus: ${topic.grammarFocus} | Difficulty: ${topic.difficultyTag} | Scenario: ${scenarioType}
@@ -113,7 +188,11 @@ Generate the lesson JSON now.
 // set, which is also every existing user's default).
 // ============================================================================
 
-function getScenarioType(day, learningGoal) {
+function getScenarioType(day, learningGoal, level) {
+  // Beginners follow the stage's everyday situations through Day 90 (the
+  // goal family's day-1 slot was "shopping", which made Day 1 a shopping lesson).
+  const beginnerScenario = level === 'beginner' ? getBeginnerScenario(day) : null;
+  if (beginnerScenario) return beginnerScenario;
   const family = getScenarioFamily(learningGoal);
   return family[day % family.length];
 }
@@ -162,8 +241,13 @@ ${vocabText}
 // PART 6: LOCAL DETERMINISTIC VALIDATION (no extra AI call)
 // ============================================================================
 
-function validateLessonJson(lessonJson) {
+function countLabel([min, max]) {
+  return min === max ? `exactly ${min}` : `${min}-${max}`;
+}
+
+function validateLessonJson(lessonJson, rules = DEFAULT_LESSON_RULES) {
   const errors = [];
+  const { conversationWordRange, explanationWordRange, speakingPrompts, vocabCount } = rules;
 
   if (!lessonJson || typeof lessonJson !== 'object') {
     return { valid: false, errors: ['lessonJson is not an object'], vocabWords: [] };
@@ -180,7 +264,7 @@ function validateLessonJson(lessonJson) {
       errors.push('conversation missing required instruction prefix');
     }
     const wordCount = lessonJson.conversation.trim().split(/\s+/).length;
-    if (wordCount < CONVERSATION_WORD_RANGE[0] || wordCount > CONVERSATION_WORD_RANGE[1]) {
+    if (wordCount < conversationWordRange[0] || wordCount > conversationWordRange[1]) {
       errors.push(`conversation word count out of range (${wordCount})`);
     }
   }
@@ -189,20 +273,22 @@ function validateLessonJson(lessonJson) {
     errors.push('explanation missing/empty');
   } else {
     const wordCount = lessonJson.explanation.trim().split(/\s+/).length;
-    if (wordCount < EXPLANATION_WORD_RANGE[0] || wordCount > EXPLANATION_WORD_RANGE[1]) {
+    if (wordCount < explanationWordRange[0] || wordCount > explanationWordRange[1]) {
       errors.push(`explanation word count out of range (${wordCount})`);
     }
   }
 
-  if (!Array.isArray(lessonJson.guidedSpeakingPrompts) || lessonJson.guidedSpeakingPrompts.length !== TARGET_SPEAKING_PROMPTS) {
-    errors.push(`guidedSpeakingPrompts must contain exactly ${TARGET_SPEAKING_PROMPTS} prompts`);
+  const prompts = lessonJson.guidedSpeakingPrompts;
+  if (!Array.isArray(prompts) || prompts.length < speakingPrompts[0] || prompts.length > speakingPrompts[1]) {
+    errors.push(`guidedSpeakingPrompts must contain ${countLabel(speakingPrompts)} prompts`);
   } else if (lessonJson.guidedSpeakingPrompts.some(p => typeof p !== 'string' || !p.trim())) {
     errors.push('guidedSpeakingPrompts contains an empty/invalid entry');
   }
 
   let vocabWords = [];
-  if (!Array.isArray(lessonJson.newVocabulary) || lessonJson.newVocabulary.length !== TARGET_VOCAB_COUNT) {
-    errors.push(`newVocabulary must contain exactly ${TARGET_VOCAB_COUNT} words`);
+  const vocab = lessonJson.newVocabulary;
+  if (!Array.isArray(vocab) || vocab.length < vocabCount[0] || vocab.length > vocabCount[1]) {
+    errors.push(`newVocabulary must contain ${countLabel(vocabCount)} words`);
   } else {
     const hasIncompleteEntry = lessonJson.newVocabulary.some(v =>
       !v || typeof v.word !== 'string' || !v.word.trim() ||
@@ -267,7 +353,27 @@ function generateFallbackLesson(user, topic) {
   const topicTitle = topic.title || `Day ${user.currentDay} topic`;
   const grammarFocus = topic.grammarFocus || "today's pattern";
 
-  const fallbackJson = {
+  // Beginner Days 1-30: the reviewed, day-specific lesson for the foundation plan.
+  const foundationJson = level === 'beginner'
+    ? buildBeginnerFallbackJson(user.currentDay, REQUIRED_CONVERSATION_PREFIX)
+    : null;
+
+  const fallbackJson = foundationJson || (level === 'beginner' ? {
+    title: topic.title || `Day ${user.currentDay} Lesson`,
+    scenarioType: 'Simple everyday English',
+    conversation: `${REQUIRED_CONVERSATION_PREFIX}\n\nA: Hello! How are you?\nB: I am fine, thank you.\nA: Let's practice English.\nB: Yes, let's practice!\nA: Speak slowly and clearly.\nB: Okay. Thank you!`,
+    explanation: `Today's pattern: ${grammarFocus}\nSay it in short, simple sentences.`,
+    guidedSpeakingPrompts: [
+      'Hello! My name is ___.',
+      `Say one short sentence about ${topicTitle}.`
+    ],
+    newVocabulary: FALLBACK_VOCAB_BY_LEVEL.beginner,
+    microPractice: {
+      q1: 'My name ___ ___.',
+      q2: `Write one short sentence about ${topicTitle}.`
+    },
+    confidenceLine: 'Great job! Keep speaking every day! 💪'
+  } : {
     title: topic.title || `Day ${user.currentDay} Lesson`,
     scenarioType: 'general',
     conversation: `${REQUIRED_CONVERSATION_PREFIX}\n\nPerson A: Can you help me practice ${topicTitle}?\nPerson B: Sure, let's go through it together.\nPerson A: I want to get comfortable using ${grammarFocus}.\nPerson B: Good idea - let's try a few real examples.`,
@@ -283,7 +389,7 @@ function generateFallbackLesson(user, topic) {
       q2: `Ask a question about ${topicTitle}.`
     },
     confidenceLine: 'Keep practicing - every lesson makes you stronger! 💪'
-  };
+  });
 
   return {
     lessonJson: fallbackJson,
@@ -309,7 +415,11 @@ async function callOpenAI(messages, temperature, operation, user) {
 }
 
 async function generateLesson(user, topic, tutorMemory) {
-  const scenarioType = getScenarioType(user.currentDay, user.learningGoal);
+  const scenarioType = getScenarioType(user.currentDay, user.learningGoal, user.level);
+  const rules = getLessonRules(user);
+  const checkDifficulty = json => (isBeginner(user)
+    ? findBeginnerDifficultyIssues(json, user.currentDay, REQUIRED_CONVERSATION_PREFIX)
+    : []);
   const recentVocabWords = (tutorMemory.vocabBank || [])
     .slice(-RECENT_VOCAB_CONTEXT_LIMIT)
     .map(v => v.word);
@@ -317,7 +427,7 @@ async function generateLesson(user, topic, tutorMemory) {
   try {
     const userPrompt = buildUserPrompt(user, topic, tutorMemory, scenarioType);
     const baseMessages = [
-      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'system', content: getSystemPrompt(user) },
       { role: 'user', content: userPrompt }
     ];
 
@@ -340,7 +450,7 @@ async function generateLesson(user, topic, tutorMemory) {
 
     let lessonJson = safeParseJson(response.choices[0].message.content);
     let validation = lessonJson
-      ? validateLessonJson(lessonJson)
+      ? validateLessonJson(lessonJson, rules)
       : { valid: false, errors: ['response was not valid JSON'], vocabWords: [] };
 
     const needsStructuralRetry = !validation.valid;
@@ -348,15 +458,29 @@ async function generateLesson(user, topic, tutorMemory) {
       ? computeVocabOverlapRatio(validation.vocabWords, recentVocabWords)
       : 0;
     const needsRepetitionRetry = validation.valid && vocabOverlapRatio >= VOCAB_OVERLAP_RETRY_THRESHOLD;
+    // Beginner only: too-hard wording shares the same single retry - never a fallback.
+    const difficultyIssues = validation.valid ? checkDifficulty(lessonJson) : [];
+    const needsDifficultyRetry = difficultyIssues.length > 0;
 
     let validationStatus = 'valid';
 
-    if (needsStructuralRetry || needsRepetitionRetry) {
-      const correctionNote = needsStructuralRetry
-        ? `Your last response was invalid: ${validation.errors.join('; ')}. Return corrected JSON matching the exact required structure.`
-        : `Your vocabulary overlapped too much with recently taught words (${recentVocabWords.join(', ')}). Choose ${TARGET_VOCAB_COUNT} different, fresh words that still fit the scenario.`;
+    if (needsStructuralRetry || needsRepetitionRetry || needsDifficultyRetry) {
+      const notes = [];
+      if (needsStructuralRetry) {
+        notes.push(`Your last response was invalid: ${validation.errors.join('; ')}. Return corrected JSON matching the exact required structure.`);
+      }
+      if (needsDifficultyRetry) {
+        notes.push(`Too hard for this beginner stage: ${difficultyIssues.join('; ')}. Rewrite with shorter, simpler sentences and the same JSON structure.`);
+      }
+      if (needsRepetitionRetry) {
+        notes.push(isBeginner(user)
+          ? `Your vocabulary overlapped too much with recently taught words (${recentVocabWords.join(', ')}). Choose different common, everyday words that fit the scenario.`
+          : `Your vocabulary overlapped too much with recently taught words (${recentVocabWords.join(', ')}). Choose ${TARGET_VOCAB_COUNT} different, fresh words that still fit the scenario.`);
+      }
+      const correctionNote = notes.join(' ');
+      const retryKind = needsStructuralRetry ? 'structural' : needsDifficultyRetry ? 'difficulty' : 'repetition';
 
-      console.log(`🔄 Corrective retry (${needsStructuralRetry ? 'structural' : 'repetition'}): ${correctionNote}`);
+      console.log(`🔄 Corrective retry (${retryKind}): ${correctionNote}`);
 
       let retryHandled = false;
       try {
@@ -368,10 +492,16 @@ async function generateLesson(user, topic, tutorMemory) {
 
         const retryJson = safeParseJson(retryResponse.choices[0].message.content);
         const retryValidation = retryJson
-          ? validateLessonJson(retryJson)
+          ? validateLessonJson(retryJson, rules)
           : { valid: false, errors: ['retry response was not valid JSON'], vocabWords: [] };
 
-        if (retryValidation.valid) {
+        // A beginner retry must not be harder than the original it replaces.
+        const retryIssueCount = checkDifficulty(retryJson).length;
+        const retryNotHarder = needsDifficultyRetry
+          ? retryIssueCount < difficultyIssues.length
+          : retryIssueCount === 0;
+
+        if (retryValidation.valid && (needsStructuralRetry || retryNotHarder)) {
           lessonJson = retryJson;
           validationStatus = 'retried';
           retryHandled = true;
@@ -394,11 +524,27 @@ async function generateLesson(user, topic, tutorMemory) {
           });
           return generateFallbackLesson(user, topic);
         }
-        // Original was structurally valid (only a vocab-overlap concern) and the
-        // retry didn't improve it - accept the original rather than burn the
+        // Original was structurally valid (only a vocab-overlap or beginner
+        // difficulty concern) and the retry didn't improve it - accept the original rather than burn the
         // curriculum-aligned content on a cosmetic repetition issue.
         validationStatus = 'valid';
       }
+    }
+
+    // Beginner Days 1-30: never deliver a lesson known to fail the difficulty
+    // check (e.g. both AI attempts too hard) - use the reviewed day lesson.
+    const remainingIssues = isBeginner(user) && getBeginnerStage(user.currentDay).strictWords
+      ? checkDifficulty(lessonJson)
+      : [];
+    if (remainingIssues.length) {
+      await Log.create({
+        type: 'LESSON_GENERATION_FALLBACK',
+        userPhone: user.phone,
+        message: 'Used beginner fallback lesson after difficulty check failures',
+        status: 'WARNING',
+        metadata: { day: user.currentDay, topic: topic.title, errors: remainingIssues }
+      });
+      return generateFallbackLesson(user, topic);
     }
 
     const lessonText = formatLessonForWhatsApp(lessonJson, user.currentDay);
@@ -440,6 +586,7 @@ async function generateLesson(user, topic, tutorMemory) {
 
 module.exports = {
   generateLesson,
+  getLessonRules,
   generateFallbackLesson,
   formatLessonForWhatsApp,
   validateLessonJson,

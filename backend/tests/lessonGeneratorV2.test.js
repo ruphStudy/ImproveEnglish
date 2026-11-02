@@ -192,7 +192,7 @@ describe('generateLesson', () => {
 
 describe('generateFallbackLesson', () => {
   test('fallback content is level-aware and references the current topic', () => {
-    const beginner = generateFallbackLesson({ name: 'A', level: 'beginner', currentDay: 3 }, topic);
+    const beginner = generateFallbackLesson({ name: 'A', level: 'beginner', currentDay: 31 }, topic); // Days 1-30 use the reviewed day lessons
     const advanced = generateFallbackLesson({ name: 'B', level: 'advanced', currentDay: 3 }, topic);
 
     expect(beginner.lessonJson.newVocabulary).not.toEqual(advanced.lessonJson.newVocabulary);
