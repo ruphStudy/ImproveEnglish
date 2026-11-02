@@ -9,7 +9,9 @@ import {
   buildFreeActivationPayload,
   friendlyPromoError,
   runExclusive,
-  nextLessonDelivery
+  nextLessonDelivery,
+  welcomeNotice,
+  levelLabel
 } from './freePromo.js';
 
 const quote30 = { code: 'BETA100', originalAmount: 499, isFree: true, applicableDurations: [30], planDuration: 30 };
@@ -85,4 +87,30 @@ test('first lesson is the next 7:00 AM India time', () => {
   assert.equal(nextLessonDelivery(new Date('2026-11-03T00:30:00Z')).toISOString(), '2026-11-03T01:30:00.000Z');
   // 08:00 IST -> next day 07:00 IST
   assert.equal(nextLessonDelivery(new Date('2026-11-03T02:30:00Z')).toISOString(), '2026-11-04T01:30:00.000Z');
+});
+
+test('welcome status wording never overstates what happened', () => {
+  const ctx = { phone: '+919876543210', firstLesson: 'Wed, 4 Nov, 7:00 am (India time)' };
+  const accepted = welcomeNotice('accepted', ctx);
+  assert.match(accepted.text, /accepted our welcome message for \+919876543210/);
+  for (const status of ['accepted', 'not_sent', 'failed', 'pending', undefined]) {
+    const { title, text } = welcomeNotice(status, ctx);
+    assert.doesNotMatch(`${title} ${text}`, /delivered/i); // delivery is never confirmed
+    assert.match(text, /7:00 am \(India time\)/);
+  }
+  for (const status of ['not_sent', 'failed', 'pending', 'something_new']) {
+    const { title, text } = welcomeNotice(status, ctx);
+    assert.doesNotMatch(`${title} ${text}`, /accepted|on its way|arrives within/i);
+  }
+  assert.match(welcomeNotice('not_sent', ctx).text, /have not sent/);
+  assert.match(welcomeNotice('failed', ctx).text, /could not send/);
+  assert.equal(levelLabel('beginner'), 'Beginner');
+});
+
+test('the success screen replaces the registration form and pricing', () => {
+  const src = readFileSync(new URL('../pages/BuyPlan.jsx', import.meta.url), 'utf8');
+  const block = src.slice(src.indexOf('{freeActivated ? ('), src.indexOf('{/* Trust Indicators */}'));
+  assert.ok(block.includes('<FreeActivationSuccess activation={freeActivated} />'));
+  assert.ok(block.includes('Choose Your Plan') && block.includes('Your Details')); // both in the replaced branch
+  for (const step of ['Reply START', 'Reply DONE', "['Paid', '₹0']"]) assert.ok(src.includes(step));
 });

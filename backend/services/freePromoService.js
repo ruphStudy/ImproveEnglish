@@ -132,7 +132,8 @@ async function reserveSlot(activation, now) {
 }
 
 async function sendFreeWelcome(activation, user) {
-  const template = process.env.WHATSAPP_FREE_WELCOME_TEMPLATE;
+  // FREE_PROMO welcome only (e.g. subscription_welcome); paid flows use payment_welcome_new.
+  const template = (process.env.WHATSAPP_FREE_WELCOME_TEMPLATE || '').trim();
   if (!template) {
     // No approved free-beta template yet - deliberately send nothing rather
     // than the paid "payment_welcome_new" wording.
@@ -140,13 +141,14 @@ async function sendFreeWelcome(activation, user) {
     return 'skipped_no_template';
   }
   try {
-    await sendTemplateMessage(
+    const response = await sendTemplateMessage(
       user.phone,
       template,
       [user.name || 'Learner', String(activation.planDuration), activation.level, user.expiryDate.toISOString().split('T')[0]],
       process.env.WHATSAPP_FREE_WELCOME_TEMPLATE_LANG || 'en_US'
     );
-    await FreeActivation.updateOne({ _id: activation._id }, { $set: { welcomeStatus: 'sent' } });
+    const messageId = response?.messages?.[0]?.id || null;
+    await FreeActivation.updateOne({ _id: activation._id }, { $set: { welcomeStatus: 'sent', welcomeMessageId: messageId } });
     return 'sent';
   } catch (err) {
     // The subscription stays active - a failed notification never reverses it.
@@ -195,6 +197,22 @@ async function ensureUser(activation) {
   }
 }
 
+// Public (API) view of the stored welcome status. The Cloud API only tells us
+// it ACCEPTED a message; delivery receipts are not processed, so delivery is
+// never claimed. Error details stay server-side.
+const PUBLIC_WELCOME_STATUS = {
+  sent: 'accepted',
+  skipped_no_template: 'not_sent',
+  failed: 'failed',
+  pending: 'pending'
+};
+
+function publicWelcomeStatus(welcomeStatus) {
+  return PUBLIC_WELCOME_STATUS[welcomeStatus] || 'pending';
+}
+
+// Retries return the stored welcome status and never send a message - so
+// already-activated learners are not messaged when a template is configured later.
 function activatedResult(activation, alreadyActivated) {
   return {
     ok: true,
@@ -202,7 +220,8 @@ function activatedResult(activation, alreadyActivated) {
     alreadyActivated,
     expiryDate: activation.expiryDate,
     level: activation.level,
-    planDuration: activation.planDuration
+    planDuration: activation.planDuration,
+    welcomeStatus: activation.welcomeStatus || 'pending'
   };
 }
 
@@ -365,4 +384,4 @@ async function reconcileStaleFreeActivations({ execute = false, olderThanMinutes
   return { stale: stale.length, actions, executed: execute };
 }
 
-module.exports = { quotePromo, activateFreePromo, reconcileStaleFreeActivations, getPlanPriceInr, isFreePromoDoc };
+module.exports = { quotePromo, activateFreePromo, reconcileStaleFreeActivations, getPlanPriceInr, isFreePromoDoc, publicWelcomeStatus };

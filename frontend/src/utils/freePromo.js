@@ -72,3 +72,43 @@ export function formatLessonDelivery(date) {
     timeZone: 'Asia/Kolkata', weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit'
   })} (India time)`;
 }
+
+export function levelLabel(level) {
+  const s = String(level || 'beginner');
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/**
+ * Success-screen wording for the activation's welcomeStatus. "accepted" means
+ * WhatsApp accepted the message, not that it was delivered, so nothing here
+ * ever says "delivered" - and skipped/failed never claim a message was sent.
+ */
+export function welcomeNotice(status, { phone, firstLesson }) {
+  const lesson = `Your first lesson notification will arrive on WhatsApp at ${firstLesson}.`;
+  switch (status) {
+    case 'accepted':
+      return {
+        tone: 'success',
+        title: 'Welcome message on its way',
+        text: `WhatsApp has accepted our welcome message for ${phone}. It usually arrives within a few minutes. ${lesson}`
+      };
+    case 'failed':
+      return {
+        tone: 'warning',
+        title: 'Welcome message could not be sent',
+        text: `We could not send a WhatsApp welcome message right now, but your plan is active. ${lesson}`
+      };
+    case 'not_sent':
+      return {
+        tone: 'info',
+        title: 'No welcome message yet',
+        text: `We have not sent a WhatsApp welcome message. You do not need one to start. ${lesson}`
+      };
+    default:
+      return {
+        tone: 'info',
+        title: 'Welcome message not confirmed',
+        text: `We cannot confirm a WhatsApp welcome message yet. Your plan is active. ${lesson}`
+      };
+  }
+}

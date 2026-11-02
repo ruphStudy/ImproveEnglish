@@ -11,7 +11,9 @@ import {
   friendlyPromoError,
   runExclusive,
   nextLessonDelivery,
-  formatLessonDelivery
+  formatLessonDelivery,
+  levelLabel,
+  welcomeNotice
 } from '../utils/freePromo';
 
 // ISO code is sent to the backend, which validates and normalizes the number.
@@ -354,11 +356,18 @@ export default function BuyPlan() {
         // Only the existing free endpoint - never a Razorpay order. Safe to
         // retry: the backend makes repeated requests for the same number + code idempotent.
         const res = await activateFree(buildFreeActivationPayload(formData, promo));
+        // Server values are authoritative (a retry returns the original activation).
         setFreeActivated({
+          name: formData.name.trim(),
+          phone: getInternationalPhone(),
+          level: res.data.level || formData.level,
+          planDuration: res.data.planDuration || formData.planDuration,
           expiryDate: res.data.expiryDate,
-          planDuration: formData.planDuration,
+          welcomeStatus: res.data.welcomeStatus,
+          alreadyActivated: !!res.data.alreadyActivated,
           firstLesson: nextLessonDelivery()
         });
+        window.scrollTo({ top: 0, behavior: 'smooth' });
       } catch (err) {
         if (err.response && [400, 409].includes(err.response.status)) {
           clearPromoQuote();
@@ -462,6 +471,9 @@ export default function BuyPlan() {
           </div>
         )}
 
+        {freeActivated ? (
+          <FreeActivationSuccess activation={freeActivated} />
+        ) : (
         <div className="bg-white rounded-2xl shadow-xl overflow-hidden">
           <div className="md:flex">
             {/* Left Side - Form */}
@@ -700,18 +712,7 @@ export default function BuyPlan() {
                 </ul>
               </div>
 
-              {freeActivated ? (
-                <div role="status" className="p-6 bg-green-50 border border-green-200 rounded-lg text-center">
-                  <h3 className="text-xl font-bold text-green-800 mb-3">🎉 Your free plan is active!</h3>
-                  <ul className="text-green-900 text-sm space-y-1">
-                    <li><strong>Plan:</strong> {freeActivated.planDuration} days</li>
-                    {freeActivated.expiryDate && (
-                      <li><strong>Valid until:</strong> {new Date(freeActivated.expiryDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}</li>
-                    )}
-                    <li><strong>First lesson:</strong> {formatLessonDelivery(freeActivated.firstLesson)} on WhatsApp</li>
-                  </ul>
-                </div>
-              ) : offer && promoChecking ? (
+              {offer && promoChecking ? (
                 <button disabled className="w-full py-4 rounded-lg font-semibold text-white text-lg bg-gray-400 cursor-not-allowed">
                   Checking your code…
                 </button>
@@ -784,6 +785,7 @@ export default function BuyPlan() {
             </div>
           </div>
         </div>
+        )}
 
         {/* Trust Indicators */}
         <div className="mt-8 text-center text-gray-600">
@@ -796,5 +798,75 @@ export default function BuyPlan() {
       <Footer />
       </div>
     </div>
+  );
+}
+
+const NOTICE_STYLES = {
+  success: 'bg-green-50 border-green-200 text-green-900',
+  warning: 'bg-amber-50 border-amber-300 text-amber-900',
+  info: 'bg-blue-50 border-blue-200 text-blue-900'
+};
+
+// Replaces the form and pricing after a free activation.
+function FreeActivationSuccess({ activation }) {
+  const firstLesson = formatLessonDelivery(activation.firstLesson);
+  const notice = welcomeNotice(activation.welcomeStatus, { phone: activation.phone, firstLesson });
+  const expiry = activation.expiryDate
+    ? new Date(activation.expiryDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })
+    : null;
+  const details = [
+    ['Name', activation.name],
+    ['Level', levelLabel(activation.level)],
+    ['Plan', `${activation.planDuration} days`],
+    ['Paid', '₹0'],
+    ...(expiry ? [['Valid until', expiry]] : []),
+    ['First lesson', firstLesson]
+  ];
+  const steps = [
+    ['Get the WhatsApp notification', 'Every morning at 7:00 AM (India time), we send a lesson notification.'],
+    ['Reply START', 'Your lesson for the day arrives right away.'],
+    ['Do the lesson', 'Read, speak the conversation aloud and practise. Voice notes are welcome.'],
+    ['Reply DONE', 'This completes the day. Your next lesson comes the next morning.']
+  ];
+
+  return (
+    <section role="status" aria-live="polite" className="bg-white rounded-2xl shadow-xl p-6 sm:p-10 max-w-2xl mx-auto">
+      <div className="text-center mb-6">
+        <div className="text-5xl mb-3" aria-hidden="true">🎉</div>
+        <h2 className="text-2xl sm:text-3xl font-bold text-gray-900">Registration successful!</h2>
+        <p className="text-gray-600 mt-2">
+          {activation.alreadyActivated
+            ? `Welcome back, ${activation.name}. This number is already registered with this code - here are your plan details.`
+            : `Welcome to Fluency Loop English, ${activation.name}. Your free plan is active.`}
+        </p>
+      </div>
+
+      <dl className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
+        {details.map(([label, value]) => (
+          <div key={label} className="bg-gray-50 rounded-lg px-4 py-3">
+            <dt className="text-xs uppercase tracking-wide text-gray-500">{label}</dt>
+            <dd className="font-semibold text-gray-900 break-words">{value}</dd>
+          </div>
+        ))}
+      </dl>
+
+      <div className={`border rounded-lg p-4 mb-6 ${NOTICE_STYLES[notice.tone]}`}>
+        <p className="font-semibold">{notice.title}</p>
+        <p className="text-sm mt-1">{notice.text}</p>
+      </div>
+
+      <h3 className="font-semibold text-gray-900 mb-3">How your daily lesson works</h3>
+      <ol className="space-y-3">
+        {steps.map(([title, text], i) => (
+          <li key={title} className="flex gap-3">
+            <span className="shrink-0 w-7 h-7 rounded-full bg-green-600 text-white text-sm font-bold flex items-center justify-center">{i + 1}</span>
+            <span>
+              <span className="font-medium text-gray-900">{title}</span>
+              <span className="block text-sm text-gray-600">{text}</span>
+            </span>
+          </li>
+        ))}
+      </ol>
+    </section>
   );
 }

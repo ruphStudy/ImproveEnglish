@@ -42,7 +42,7 @@ exports.activateFree = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Please enter a valid WhatsApp number for the selected country' });
     }
 
-    const { activateFreePromo } = require('../services/freePromoService');
+    const { activateFreePromo, publicWelcomeStatus } = require('../services/freePromoService');
     const result = await activateFreePromo({
       name: String(name).trim(),
       email: String(email).trim(),
@@ -60,7 +60,10 @@ exports.activateFree = async (req, res) => {
       alreadyActivated: result.alreadyActivated,
       level: result.level,
       planDuration: result.planDuration,
-      expiryDate: result.expiryDate
+      expiryDate: result.expiryDate,
+      // accepted | not_sent | failed | pending - acceptance by WhatsApp, never a delivery receipt
+      welcomeStatus: publicWelcomeStatus(result.welcomeStatus),
+      welcomeDeliveryConfirmed: false
     });
   } catch (error) {
     console.error('❌ Error activating free beta:', error.message);

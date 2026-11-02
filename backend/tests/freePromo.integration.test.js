@@ -208,10 +208,15 @@ describeDb('free beta activation (real MongoDB)', () => {
 
   test('approved template is sent once; a WhatsApp failure does not reverse activation', async () => {
     await seedPromo();
-    process.env.WHATSAPP_FREE_WELCOME_TEMPLATE = 'beta_welcome_free';
+    process.env.WHATSAPP_FREE_WELCOME_TEMPLATE = 'subscription_welcome';
     const ok = await activateFreePromo({ ...base, phone: phoneN(7) });
     expect(ok.welcomeStatus).toBe('sent');
-    expect(sendTemplateMessage).toHaveBeenCalledWith(phoneN(7), 'beta_welcome_free', expect.any(Array), 'en_US');
+    const user7 = await User.findOne({ phone: phoneN(7) });
+    // exactly 4 body params, in template order: name, days, level, expiry (YYYY-MM-DD)
+    expect(sendTemplateMessage).toHaveBeenCalledWith(
+      phoneN(7), 'subscription_welcome', ['Beta Learner', '30', 'beginner', user7.expiryDate.toISOString().slice(0, 10)], 'en_US'
+    );
+    expect(sendTemplateMessage.mock.calls[0][2][3]).toMatch(/^\d{4}-\d{2}-\d{2}$/);
 
     await activateFreePromo({ ...base, phone: phoneN(7) }); // retry sends nothing more
     expect(sendTemplateMessage).toHaveBeenCalledTimes(1);
@@ -220,6 +225,22 @@ describeDb('free beta activation (real MongoDB)', () => {
     const failed = await activateFreePromo({ ...base, phone: phoneN(8) });
     expect(failed).toMatchObject({ ok: true, welcomeStatus: 'failed' });
     expect(await User.findOne({ phone: phoneN(8) })).toMatchObject({ isActive: true, state: 'READY' });
+  });
+
+  test('blank or whitespace-only template config sends nothing and never falls back to a paid template', async () => {
+    await seedPromo();
+    process.env.WHATSAPP_FREE_WELCOME_TEMPLATE = '   ';
+    const result = await activateFreePromo({ ...base, phone: phoneN(10) });
+    expect(result).toMatchObject({ ok: true, welcomeStatus: 'skipped_no_template' });
+    expect(sendTemplateMessage).not.toHaveBeenCalled();
+  });
+
+  test('free activation never uses payment_welcome_new, even with the template configured', async () => {
+    await seedPromo();
+    process.env.WHATSAPP_FREE_WELCOME_TEMPLATE = 'subscription_welcome';
+    await activateFreePromo({ ...base, phone: phoneN(11) });
+    expect(sendTemplateMessage).toHaveBeenCalledTimes(1);
+    expect(sendTemplateMessage.mock.calls.map(c => c[1])).toEqual(['subscription_welcome']);
   });
 
   test('crash after user creation: a retry resumes and finishes without duplicates', async () => {
@@ -326,6 +347,55 @@ describeDb('free beta activation (real MongoDB)', () => {
       });
       expect(res.status).toBe(200);
       expect(await User.findOne({ phone: '14165550123' })).toMatchObject({ state: 'READY' });
+    });
+
+    const activate = async (phone) => {
+      const res = await post('/api/payments/activate-free', {
+        name: 'Asha', email: 'asha@example.com', phone, country: 'IN', level: 'beginner', planDuration: 30, promoCode: 'BETA100'
+      });
+      return { status: res.status, body: await res.json() };
+    };
+
+    test('without a template the API says the welcome was not sent - including on retries', async () => {
+      await seedPromo();
+      const first = await activate('9876501001');
+      expect(first.status).toBe(200);
+      expect(first.body).toMatchObject({ success: true, alreadyActivated: false, level: 'beginner', planDuration: 30, welcomeStatus: 'not_sent', welcomeDeliveryConfirmed: false });
+      const retry = await activate('9876501001');
+      expect(retry.body).toMatchObject({ alreadyActivated: true, welcomeStatus: 'not_sent', welcomeDeliveryConfirmed: false });
+      expect(sendTemplateMessage).not.toHaveBeenCalled();
+    });
+
+    test('configuring the template later never messages already-activated learners', async () => {
+      await seedPromo();
+      await activate('9876501002');
+      process.env.WHATSAPP_FREE_WELCOME_TEMPLATE = 'subscription_welcome';
+      const retry = await activate('9876501002');
+      expect(retry.body).toMatchObject({ alreadyActivated: true, welcomeStatus: 'not_sent' });
+      expect(sendTemplateMessage).not.toHaveBeenCalled();
+      expect((await FreeActivation.findOne({ phone: '919876501002' })).welcomeStatus).toBe('skipped_no_template');
+    });
+
+    test('an accepted template is reported as accepted (not delivered) and stores the message id', async () => {
+      await seedPromo();
+      process.env.WHATSAPP_FREE_WELCOME_TEMPLATE = 'subscription_welcome';
+      sendTemplateMessage.mockResolvedValueOnce({ messages: [{ id: 'wamid.TEST1' }] });
+      const first = await activate('9876501003');
+      expect(first.body).toMatchObject({ welcomeStatus: 'accepted', welcomeDeliveryConfirmed: false });
+      expect(await FreeActivation.findOne({ phone: '919876501003' })).toMatchObject({ welcomeStatus: 'sent', welcomeMessageId: 'wamid.TEST1' });
+      const retry = await activate('9876501003');
+      expect(retry.body).toMatchObject({ alreadyActivated: true, welcomeStatus: 'accepted' });
+      expect(sendTemplateMessage).toHaveBeenCalledTimes(1);
+    });
+
+    test('a failed welcome is reported as failed without leaking the error; the account stays active', async () => {
+      await seedPromo();
+      process.env.WHATSAPP_FREE_WELCOME_TEMPLATE = 'subscription_welcome';
+      sendTemplateMessage.mockRejectedValueOnce(new Error('(#132001) Template name does not exist'));
+      const res = await activate('9876501004');
+      expect(res.body).toMatchObject({ success: true, welcomeStatus: 'failed', welcomeDeliveryConfirmed: false });
+      expect(JSON.stringify(res.body)).not.toMatch(/132001|Template name/);
+      expect(await User.findOne({ phone: '919876501004' })).toMatchObject({ isActive: true, state: 'READY' });
     });
 
     test('/promo/validate ignores client price and reports a free code', async () => {

@@ -22,8 +22,10 @@ const freeActivationSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
   expiryDate: { type: Date, default: null },
   activatedAt: { type: Date, default: null },
+  // 'sent' = accepted by the WhatsApp Cloud API (not a delivery receipt).
   welcomeStatus: { type: String, enum: ['pending', 'sent', 'failed', 'skipped_no_template'], default: 'pending' },
-  welcomeError: { type: String, default: null }
+  welcomeError: { type: String, default: null },
+  welcomeMessageId: { type: String, default: null } // wamid returned on acceptance, for later delivery checks
 }, { timestamps: true });
 
 freeActivationSchema.index({ promoCode: 1, phone: 1 }, { unique: true });
