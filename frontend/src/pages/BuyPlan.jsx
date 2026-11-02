@@ -2,9 +2,11 @@ import { useState, useEffect, useRef } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { createOrder, getOrderStatus, getPlans, getPaymentConfig, validatePromo, activateFree } from '../api';
 import Footer from '../components/Footer';
+import { checkPhone } from '../utils/phone';
 
 // ISO code is sent to the backend, which validates and normalizes the number.
-// Numbers typed with a leading "+" are treated as international regardless of selection.
+// With a country selected the number (with or without "+") must belong to it;
+// "Other" (code '') requires a full "+" international number.
 const COUNTRIES = [
   { code: 'IN', name: 'India', dial: '91' },
   { code: 'CA', name: 'Canada', dial: '1' },
@@ -25,7 +27,8 @@ const COUNTRIES = [
   { code: 'IE', name: 'Ireland', dial: '353' },
   { code: 'NP', name: 'Nepal', dial: '977' },
   { code: 'BD', name: 'Bangladesh', dial: '880' },
-  { code: 'LK', name: 'Sri Lanka', dial: '94' }
+  { code: 'LK', name: 'Sri Lanka', dial: '94' },
+  { code: '', name: 'Other country', dial: '' }
 ];
 
 export default function BuyPlan() {
@@ -49,6 +52,7 @@ export default function BuyPlan() {
   const [loadingPlans, setLoadingPlans] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [phoneError, setPhoneError] = useState('');
   const [processingPayment, setProcessingPayment] = useState(false);
   const [orderId, setOrderId] = useState(null);
   const [testMode, setTestMode] = useState(false);
@@ -182,6 +186,7 @@ export default function BuyPlan() {
   const handleChange = (e) => {
     const { name, value } = e.target;
     if (['phone', 'country', 'level'].includes(name)) clearPromoQuote();
+    if (['phone', 'country'].includes(name)) setPhoneError('');
     
     if (name === 'level') {
       // When level changes, check if current duration is available
@@ -220,9 +225,8 @@ export default function BuyPlan() {
       setError('Please enter your name');
       return false;
     }
-    const phoneDigits = formData.phone.replace(/\D/g, '');
-    if (phoneDigits.length < 6 || phoneDigits.length > 15) {
-      setError('Please enter a valid WhatsApp number');
+    if (!validatePhone()) {
+      setError('Please correct your WhatsApp number');
       return false;
     }
     if (!formData.email.trim() || !formData.email.includes('@')) {
@@ -234,11 +238,13 @@ export default function BuyPlan() {
 
   const selectedCountry = COUNTRIES.find(c => c.code === formData.country) || COUNTRIES[0];
 
-  const getInternationalPhone = () => {
-    const raw = formData.phone.trim();
-    if (raw.startsWith('+')) return raw;
-    return `+${selectedCountry.dial}${raw.replace(/\D/g, '').replace(/^0+/, '')}`;
+  const validatePhone = () => {
+    const { error: msg } = checkPhone(formData.phone, formData.country, selectedCountry.name);
+    setPhoneError(msg || '');
+    return !msg;
   };
+
+  const getInternationalPhone = () => checkPhone(formData.phone, formData.country, selectedCountry.name).e164;
 
   const handleApplyPromo = async () => {
     setPromoMessage('');
@@ -250,6 +256,10 @@ export default function BuyPlan() {
     }
     if (!formData.phone.trim()) {
       setPromoMessage('Please enter your WhatsApp number first.');
+      return;
+    }
+    if (!validatePhone()) {
+      setPromoMessage('Please correct your WhatsApp number first.');
       return;
     }
     setPromoChecking(true);
@@ -430,7 +440,7 @@ export default function BuyPlan() {
                       className="w-32 shrink-0 px-2 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     >
                       {COUNTRIES.map((c) => (
-                        <option key={c.code} value={c.code}>{c.code} +{c.dial}</option>
+                        <option key={c.code || 'other'} value={c.code}>{c.code ? `${c.code} +${c.dial}` : 'Other'}</option>
                       ))}
                     </select>
                     <input
@@ -441,14 +451,20 @@ export default function BuyPlan() {
                       autoComplete="tel-national"
                       value={formData.phone}
                       onChange={handleChange}
-                      placeholder={formData.country === 'IN' ? '9876543210' : 'Phone number'}
+                      placeholder={formData.country === 'IN' ? '9876543210' : (formData.country ? 'Phone number' : '+44 7400 123456')}
                       aria-describedby="phone-help"
+                      aria-invalid={phoneError ? 'true' : undefined}
                       className="min-w-0 flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                       required
                     />
                   </div>
+                  {phoneError && (
+                    <p role="alert" className="text-sm text-red-600 mt-1">{phoneError}</p>
+                  )}
                   <p id="phone-help" className="text-xs text-gray-500 mt-1">
-                    {selectedCountry.name} (+{selectedCountry.dial}). Enter the number without the country code. Country not listed? Type the full number starting with +.
+                    {selectedCountry.code
+                      ? `${selectedCountry.name} (+${selectedCountry.dial}). Enter the number without the country code. Country not listed? Choose Other.`
+                      : 'Type the full number starting with + and the country code.'}
                   </p>
                 </div>
 

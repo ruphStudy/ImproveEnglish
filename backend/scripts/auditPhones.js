@@ -23,7 +23,7 @@ function mask(phone) {
 function classifyStoredPhone(stored) {
   const asStored = normalizePhone(`+${stored}`);
   if (asStored === stored) return { status: 'ok' };
-  const suggested = normalizePhone(stored, 'IN');
+  const suggested = normalizePhone(stored); // default India, any valid country accepted
   return suggested && suggested !== stored
     ? { status: 'non_canonical', suggested }
     : { status: 'invalid' };

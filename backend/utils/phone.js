@@ -13,6 +13,10 @@ const DEFAULT_COUNTRY = 'IN';
  *   handled correctly.
  * - Digits that already carry a country code but no "+" (legacy "919876543210")
  *   are accepted too.
+ * - When `country` is supplied explicitly (the website form), the parsed number
+ *   must belong to that country - with or without "+". This rejects e.g. a US
+ *   +1 832 number submitted with Canada selected. Without `country` (WhatsApp
+ *   msg.from, admin lookups) any valid number is accepted, as before.
  *
  * Returns null when the number is not valid - callers must reject it rather
  * than guess.
@@ -25,7 +29,8 @@ function normalizePhone(input, country) {
   if (!/^\+?\d{4,17}$/.test(s)) return null;
 
   let region = DEFAULT_COUNTRY;
-  if (country !== undefined && country !== null && country !== '') {
+  const strict = country !== undefined && country !== null && country !== '';
+  if (strict) {
     if (typeof country !== 'string' || !/^[A-Za-z]{2}$/.test(country)) return null;
     region = country.toUpperCase();
   }
@@ -36,6 +41,7 @@ function normalizePhone(input, country) {
     parsed = parsePhoneNumberFromString(`+${s}`);
   }
   if (!parsed || !parsed.isValid()) return null;
+  if (strict && parsed.country !== region) return null;
   return parsed.number.slice(1);
 }
 
