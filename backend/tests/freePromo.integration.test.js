@@ -335,6 +335,24 @@ describeDb('free beta activation (real MongoDB)', () => {
       expect(body).toMatchObject({ valid: true, isFree: true, promo: { originalAmount: 499, finalAmount: 0 } });
     });
 
+    test('/promo/validate reports covered plan lengths and refuses a 30-day-only code on the 90-day plan', async () => {
+      await seedPromo();
+      const ok = await (await post('/api/promo/validate', { code: 'BETA100', phone: '9876512345', level: 'beginner', planDuration: 30 })).json();
+      expect(ok.applicableDurations).toEqual([30]);
+      const ninety = await (await post('/api/promo/validate', { code: 'BETA100', phone: '9876512345', level: 'beginner', planDuration: 90 })).json();
+      expect(ninety).toMatchObject({ valid: false, message: 'Promo code not valid for 90-day plan' });
+      expect(ninety.promo).toBeUndefined();
+    });
+
+    test('/promo/validate gives specific errors for expired, fully used and unknown codes', async () => {
+      const check = async code => (await (await post('/api/promo/validate', { code, phone: '9876512345', level: 'beginner', planDuration: 30 })).json());
+      await seedPromo({ code: 'OLD100', validUntil: new Date(Date.now() - DAY) });
+      await seedPromo({ code: 'FULL100', maxUses: 1, currentUses: 1 });
+      expect(await check('OLD100')).toMatchObject({ valid: false, message: 'Promo code has expired' });
+      expect(await check('FULL100')).toMatchObject({ valid: false, message: 'Promo code usage limit reached' });
+      expect(await check('NOPE')).toMatchObject({ valid: false, message: 'Invalid promo code' });
+    });
+
     test('invalid phone and missing promo are rejected', async () => {
       await seedPromo();
       expect((await post('/api/payments/activate-free', { ...base, promoCode: 'BETA100', phone: '12345' })).status).toBe(400);

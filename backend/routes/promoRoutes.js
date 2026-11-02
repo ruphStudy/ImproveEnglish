@@ -47,6 +47,7 @@ router.post('/validate', promoValidateLimiter, async (req, res) => {
       success: true,
       valid: true,
       isFree: quote.isFree,
+      applicableDurations: quote.applicableDurations,
       promo: {
         code: quote.code,
         description: quote.description,

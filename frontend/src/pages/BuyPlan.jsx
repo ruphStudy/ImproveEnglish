@@ -3,6 +3,16 @@ import { useSearchParams, useNavigate } from 'react-router-dom';
 import { createOrder, getOrderStatus, getPlans, getPaymentConfig, validatePromo, activateFree } from '../api';
 import Footer from '../components/Footer';
 import { checkPhone } from '../utils/phone';
+import {
+  isPlanEligible,
+  checkoutMode,
+  promoResetAction,
+  buildFreeActivationPayload,
+  friendlyPromoError,
+  runExclusive,
+  nextLessonDelivery,
+  formatLessonDelivery
+} from '../utils/freePromo';
 
 // ISO code is sent to the backend, which validates and normalizes the number.
 // With a country selected the number (with or without "+") must belong to it;
@@ -57,8 +67,11 @@ export default function BuyPlan() {
   const [orderId, setOrderId] = useState(null);
   const [testMode, setTestMode] = useState(false);
   const [promoInput, setPromoInput] = useState('');
-  const [promo, setPromo] = useState(null); // server quote for the applied code
+  const [promo, setPromo] = useState(null); // server quote for the applied code + selected plan
+  const [offer, setOffer] = useState(null); // { code, applicableDurations } of the applied free code
   const [promoMessage, setPromoMessage] = useState('');
+  const [promoTone, setPromoTone] = useState('info'); // info | success | error
+  const promoRequestRef = useRef(0); // ignores responses for an outdated form state
   const [promoChecking, setPromoChecking] = useState(false);
   const [freeActivated, setFreeActivated] = useState(null);
   const submittingRef = useRef(false); // blocks double submission even before re-render
@@ -178,14 +191,24 @@ export default function BuyPlan() {
     return () => clearInterval(interval);
   }, [orderId, processingPayment]);
 
-  const clearPromoQuote = () => {
+  const showPromoMessage = (text, tone = 'info') => {
+    setPromoMessage(text);
+    setPromoTone(tone);
+  };
+
+  const clearPromoQuote = (message = '') => {
+    promoRequestRef.current++; // drop any in-flight quote
     setPromo(null);
-    setPromoMessage('');
+    setOffer(null);
+    setPromoChecking(false);
+    showPromoMessage(message);
   };
 
   const handleChange = (e) => {
     const { name, value } = e.target;
-    if (['phone', 'country', 'level'].includes(name)) clearPromoQuote();
+    if (promoResetAction(name) === 'clear' && (offer || promo)) {
+      clearPromoQuote('Your details changed. Please apply the promo code again.');
+    }
     if (['phone', 'country'].includes(name)) setPhoneError('');
     
     if (name === 'level') {
@@ -213,7 +236,16 @@ export default function BuyPlan() {
   };
 
   const handlePlanChange = (duration) => {
-    clearPromoQuote();
+    if (offer && duration !== formData.planDuration) {
+      if (isPlanEligible(offer, duration)) {
+        requestPromoQuote(offer.code, duration); // server re-checks the new plan
+      } else {
+        promoRequestRef.current++;
+        setPromo(null);
+        setPromoChecking(false);
+        showPromoMessage(`${offer.code} is not valid for the ${getDurationLabel(duration)} plan. Choose a plan marked ₹0, or continue with regular payment.`, 'error');
+      }
+    }
     setFormData(prev => ({
       ...prev,
       planDuration: duration
@@ -246,75 +278,105 @@ export default function BuyPlan() {
 
   const getInternationalPhone = () => checkPhone(formData.phone, formData.country, selectedCountry.name).e164;
 
-  const handleApplyPromo = async () => {
-    setPromoMessage('');
+  // Server quote for `code` on `planDuration` with the current details; the
+  // backend computes the price - the page only shows the result.
+  const requestPromoQuote = async (code, planDuration) => {
+    const requestId = ++promoRequestRef.current;
     setPromo(null);
-    const code = promoInput.trim();
-    if (!code) {
-      setPromoMessage('Please enter a promo code.');
-      return;
-    }
-    if (!formData.phone.trim()) {
-      setPromoMessage('Please enter your WhatsApp number first.');
-      return;
-    }
-    if (!validatePhone()) {
-      setPromoMessage('Please correct your WhatsApp number first.');
-      return;
-    }
     setPromoChecking(true);
+    showPromoMessage('Checking your code…');
     try {
       const res = await validatePromo({
         code,
         phone: formData.phone,
         country: formData.country,
         level: formData.level,
-        planDuration: formData.planDuration
+        planDuration
       });
+      if (requestId !== promoRequestRef.current) return;
       if (res.data.valid && res.data.isFree) {
-        setPromo({ code: res.data.promo.code, originalAmount: res.data.promo.originalAmount });
-        setPromoMessage('Free beta code applied.');
+        const applicableDurations = res.data.applicableDurations || null;
+        setOffer({ code: res.data.promo.code, applicableDurations });
+        setPromo({
+          code: res.data.promo.code,
+          originalAmount: res.data.promo.originalAmount,
+          isFree: true,
+          applicableDurations,
+          planDuration
+        });
+        showPromoMessage(`${res.data.promo.code} applied - 100% discount.`, 'success');
       } else if (res.data.valid) {
-        setPromoMessage('This code is not a free beta code. You can continue with regular payment.');
+        setOffer(null);
+        showPromoMessage('This code is not a free access code. You can continue with regular payment.', 'error');
       } else {
-        setPromoMessage(res.data.message || 'Invalid promo code. You can continue with regular payment.');
+        // Only a plan-length refusal keeps the applied offer (switching back re-checks
+        // it); expired / used-up / any other refusal removes the ₹0 display entirely.
+        if (!/not valid for .*plan/i.test(res.data.message || '')) setOffer(null);
+        showPromoMessage(friendlyPromoError(res.data.message), 'error');
       }
     } catch (err) {
-      setPromoMessage(err.response?.data?.message || 'Could not check the code. Please try again.');
+      if (requestId !== promoRequestRef.current) return;
+      showPromoMessage(
+        err.response ? friendlyPromoError(err.response.data?.message) : 'Could not check the code. Please check your connection and try again.',
+        'error'
+      );
     } finally {
-      setPromoChecking(false);
+      if (requestId === promoRequestRef.current) setPromoChecking(false);
     }
+  };
+
+  const handleApplyPromo = async () => {
+    const code = promoInput.trim();
+    if (!code) {
+      showPromoMessage('Please enter a promo code.', 'error');
+      return;
+    }
+    // The backend checks the code against the WhatsApp number, so ask for it first.
+    if (!formData.phone.trim() || !validatePhone()) {
+      showPromoMessage('Enter a valid WhatsApp number above first - we use it to check the code.', 'error');
+      document.getElementById('phone')?.focus();
+      return;
+    }
+    await requestPromoQuote(code, formData.planDuration);
+  };
+
+  const handleRemovePromo = () => {
+    setPromoInput('');
+    clearPromoQuote();
   };
 
   const handleFreeActivation = async () => {
     setError('');
-    if (submittingRef.current || !validateForm() || !promo) return;
-    submittingRef.current = true;
-    setLoading(true);
-    try {
-      // Safe to retry: the backend makes repeated requests for the same number + code idempotent.
-      const res = await activateFree({
-        name: formData.name,
-        phone: formData.phone,
-        country: formData.country,
-        email: formData.email,
-        level: formData.level,
-        planDuration: formData.planDuration,
-        promoCode: promo.code
-      });
-      setFreeActivated({ expiryDate: res.data.expiryDate });
-    } catch (err) {
-      setError(err.response?.data?.message || 'Could not activate free access. Please try again.');
-      if (err.response && [400, 409].includes(err.response.status)) clearPromoQuote();
-    } finally {
-      submittingRef.current = false;
-      setLoading(false);
-    }
+    if (checkoutMode(promo, formData.planDuration) !== 'free' || !validateForm()) return;
+    await runExclusive(submittingRef, async () => {
+      setLoading(true);
+      try {
+        // Only the existing free endpoint - never a Razorpay order. Safe to
+        // retry: the backend makes repeated requests for the same number + code idempotent.
+        const res = await activateFree(buildFreeActivationPayload(formData, promo));
+        setFreeActivated({
+          expiryDate: res.data.expiryDate,
+          planDuration: formData.planDuration,
+          firstLesson: nextLessonDelivery()
+        });
+      } catch (err) {
+        if (err.response && [400, 409].includes(err.response.status)) {
+          clearPromoQuote();
+          setError(`${err.response.data?.message || 'This code could not be used.'} You can still continue with regular payment.`);
+        } else {
+          setError(err.response?.data?.message || 'Could not activate free access. Please try again.');
+        }
+      } finally {
+        setLoading(false);
+      }
+    });
   };
 
   const handlePayment = async () => {
     setError('');
     
+    // A valid free code never goes through Razorpay.
+    if (checkoutMode(promo, formData.planDuration) === 'free') return;
     if (submittingRef.current || !validateForm()) {
       return;
     }
@@ -373,6 +435,7 @@ export default function BuyPlan() {
   };
 
   const busy = loading || processingPayment || loadingPlans || !selectedPlan;
+  const isFreeCheckout = checkoutMode(promo, formData.planDuration) === 'free';
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex flex-col">
@@ -468,6 +531,55 @@ export default function BuyPlan() {
                   </p>
                 </div>
 
+                {/* Promo code (optional) - above plan selection; needs the WhatsApp number */}
+                {!freeActivated && (
+                  <div className="p-4 border border-dashed border-green-400 bg-green-50/50 rounded-lg">
+                    <label htmlFor="promo" className="block text-sm font-medium text-gray-700 mb-1">
+                      Have a promo code? <span className="text-gray-500 font-normal">(optional)</span>
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        id="promo"
+                        type="text"
+                        value={promoInput}
+                        onChange={(e) => { setPromoInput(e.target.value.toUpperCase()); if (offer || promo) clearPromoQuote(); }}
+                        placeholder="Enter code"
+                        autoComplete="off"
+                        readOnly={!!offer}
+                        aria-describedby="promo-status"
+                        className="min-w-0 flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent uppercase read-only:bg-gray-100"
+                      />
+                      {offer ? (
+                        <button
+                          type="button"
+                          onClick={handleRemovePromo}
+                          disabled={loading}
+                          className="px-4 py-2 rounded-lg font-semibold border border-gray-400 text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          Remove
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={handleApplyPromo}
+                          disabled={promoChecking || loading}
+                          className="px-4 py-2 rounded-lg font-semibold border border-blue-600 text-blue-600 hover:bg-blue-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {promoChecking ? 'Checking…' : 'Apply'}
+                        </button>
+                      )}
+                    </div>
+                    <p
+                      id="promo-status"
+                      role="status"
+                      aria-live="polite"
+                      className={`text-sm mt-2 ${promoTone === 'success' ? 'text-green-700 font-medium' : promoTone === 'error' ? 'text-red-600' : 'text-gray-600'}`}
+                    >
+                      {promoMessage}
+                    </p>
+                  </div>
+                )}
+
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
                     Email Address *
@@ -517,6 +629,7 @@ export default function BuyPlan() {
                       const label = getDurationLabel(plan.days);
                       const description = getDescription(plan.days);
                       const badge = getBadge(plan.days);
+                      const freeWithCode = offer && isPlanEligible(offer, plan.days);
 
                       return (
                         <div
@@ -538,12 +651,20 @@ export default function BuyPlan() {
                               <h3 className="font-bold text-lg text-gray-900">{label}</h3>
                               <p className="text-sm text-gray-600">{description}</p>
                             </div>
-                            <div className="text-right">
-                              <p className="text-2xl font-bold text-blue-600">₹{plan.price}</p>
-                              <p className="text-xs text-gray-500">
-                                ₹{Math.round(plan.price / plan.days)}/day
-                              </p>
-                            </div>
+                            {freeWithCode ? (
+                              <div className="text-right">
+                                <p className="text-sm text-gray-400 line-through">₹{plan.price}</p>
+                                <p className="text-2xl font-bold text-green-600">₹0</p>
+                                <p className="text-xs text-green-700">with {offer.code}</p>
+                              </div>
+                            ) : (
+                              <div className="text-right">
+                                <p className="text-2xl font-bold text-blue-600">₹{plan.price}</p>
+                                <p className="text-xs text-gray-500">
+                                  {offer ? 'Code not valid for this plan' : `₹${Math.round(plan.price / plan.days)}/day`}
+                                </p>
+                              </div>
+                            )}
                           </div>
                         </div>
                       );
@@ -579,52 +700,25 @@ export default function BuyPlan() {
                 </ul>
               </div>
 
-              {/* Promo code (optional) */}
-              {!freeActivated && (
-                <div className="mb-6">
-                  <label htmlFor="promo" className="block text-sm font-medium text-gray-700 mb-1">
-                    Promo code (optional)
-                  </label>
-                  <div className="flex gap-2">
-                    <input
-                      id="promo"
-                      type="text"
-                      value={promoInput}
-                      onChange={(e) => { setPromoInput(e.target.value.toUpperCase()); clearPromoQuote(); }}
-                      placeholder="Enter code"
-                      autoComplete="off"
-                      className="min-w-0 flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent uppercase"
-                    />
-                    <button
-                      type="button"
-                      onClick={handleApplyPromo}
-                      disabled={promoChecking || loading}
-                      className="px-4 py-2 rounded-lg font-semibold border border-blue-600 text-blue-600 hover:bg-blue-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      {promoChecking ? 'Checking…' : 'Apply'}
-                    </button>
-                  </div>
-                  <p
-                    role="status"
-                    aria-live="polite"
-                    className={`text-sm mt-2 ${promo ? 'text-green-700' : 'text-gray-600'}`}
-                  >
-                    {promoMessage}
-                  </p>
-                </div>
-              )}
-
               {freeActivated ? (
                 <div role="status" className="p-6 bg-green-50 border border-green-200 rounded-lg text-center">
-                  <h3 className="text-xl font-bold text-green-800 mb-2">🎉 Free beta access activated!</h3>
-                  <p className="text-green-800 text-sm">
-                    Your first lesson arrives on WhatsApp at the next 7:00 AM (India time) run.
-                    {freeActivated.expiryDate && ` Access is valid until ${new Date(freeActivated.expiryDate).toLocaleDateString('en-IN')}.`}
-                  </p>
+                  <h3 className="text-xl font-bold text-green-800 mb-3">🎉 Your free plan is active!</h3>
+                  <ul className="text-green-900 text-sm space-y-1">
+                    <li><strong>Plan:</strong> {freeActivated.planDuration} days</li>
+                    {freeActivated.expiryDate && (
+                      <li><strong>Valid until:</strong> {new Date(freeActivated.expiryDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}</li>
+                    )}
+                    <li><strong>First lesson:</strong> {formatLessonDelivery(freeActivated.firstLesson)} on WhatsApp</li>
+                  </ul>
                 </div>
-              ) : promo && selectedPlan ? (
+              ) : offer && promoChecking ? (
+                <button disabled className="w-full py-4 rounded-lg font-semibold text-white text-lg bg-gray-400 cursor-not-allowed">
+                  Checking your code…
+                </button>
+              ) : isFreeCheckout && selectedPlan ? (
                 <>
-                  <div className="bg-white rounded-lg p-4 mb-4 text-sm">
+                  <div className="bg-white border border-green-200 rounded-lg p-4 mb-4 text-sm">
+                    <p className="font-semibold text-green-700 mb-2">✅ 100% Discount Applied</p>
                     <div className="flex justify-between text-gray-600">
                       <span>{getDurationLabel(formData.planDuration)} plan</span>
                       <span className="line-through">₹{promo.originalAmount}</span>
@@ -634,9 +728,10 @@ export default function BuyPlan() {
                       <span>−₹{promo.originalAmount}</span>
                     </div>
                     <div className="flex justify-between font-bold text-gray-900 text-lg border-t mt-2 pt-2">
-                      <span>Total</span>
+                      <span>Total to pay:</span>
                       <span>₹0</span>
                     </div>
+                    <p className="text-gray-600 mt-2">No payment or card details required.</p>
                   </div>
                   <button
                     onClick={handleFreeActivation}
@@ -645,9 +740,8 @@ export default function BuyPlan() {
                       busy ? 'bg-gray-400 cursor-not-allowed' : 'bg-green-600 hover:bg-green-700 shadow-lg hover:shadow-xl'
                     }`}
                   >
-                    {loading ? 'Activating…' : 'Activate Free Beta Access'}
+                    {loading ? 'Activating…' : `Activate My Free ${formData.planDuration}-Day Plan`}
                   </button>
-                  <p className="text-xs text-gray-500 text-center mt-4">No payment required.</p>
                 </>
               ) : (
               <>

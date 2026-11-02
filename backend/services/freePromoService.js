@@ -66,7 +66,11 @@ async function quotePromo({ code, phone, level, planDuration }) {
     discountAmount: result.discountAmount,
     finalAmount: result.finalAmount,
     isFree,
-    description: result.description
+    description: result.description,
+    // Plan lengths the code covers (null = all) - lets the page mark eligible plans.
+    applicableDurations: promo && promo.applicableDurations && promo.applicableDurations.length
+      ? promo.applicableDurations.map(Number)
+      : null
   };
 }
 
