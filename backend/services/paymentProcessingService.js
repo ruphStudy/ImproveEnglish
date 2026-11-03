@@ -120,7 +120,7 @@ async function processSuccessfulPayment({ pendingOrder, razorpayPaymentId, payme
         userId: user._id,
         name: claimed.name,
         phone: claimed.phone,
-        email: claimed.email,
+        email: claimed.email || user.email || undefined,
         level: claimed.level,
         planDuration: claimed.planDuration,
         planName: `plan${claimed.planDuration}`,

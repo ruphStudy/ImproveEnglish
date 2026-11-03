@@ -240,6 +240,31 @@ describe('processSuccessfulPayment - new user', () => {
     expect(createdUser.state).toBe('READY');
   });
 
+  test('an upgrade for a learner without email (free signup, WhatsApp payment link) completes with no placeholder email', async () => {
+    const pendingOrder = makeClaimedOrder({ status: 'created', email: undefined });
+    PendingOrder.findOneAndUpdate.mockResolvedValue(makeClaimedOrder({ status: 'processing', email: undefined }));
+    const existingUser = makeExistingUser({ email: undefined });
+    User.findOne.mockResolvedValue(existingUser);
+    PaymentHistory.create.mockResolvedValue({});
+
+    const result = await processSuccessfulPayment({ pendingOrder, razorpayPaymentId: 'pay_nomail', paymentMethod: 'upi', amountPaidPaise: pendingOrder.amountPaise });
+    expect(result.success).toBe(true);
+    expect(PaymentHistory.create.mock.calls[0][0].email).toBeUndefined();
+    expect(existingUser.email).toBeUndefined();
+  });
+
+  test('an existing learner email is kept when the order has none, and recorded on the payment', async () => {
+    const pendingOrder = makeClaimedOrder({ status: 'created', email: '' });
+    PendingOrder.findOneAndUpdate.mockResolvedValue(makeClaimedOrder({ status: 'processing', email: '' }));
+    const existingUser = makeExistingUser({ email: 'kept@example.com' });
+    User.findOne.mockResolvedValue(existingUser);
+    PaymentHistory.create.mockResolvedValue({});
+
+    await processSuccessfulPayment({ pendingOrder, razorpayPaymentId: 'pay_keep', paymentMethod: 'upi', amountPaidPaise: pendingOrder.amountPaise });
+    expect(existingUser.email).toBe('kept@example.com');
+    expect(PaymentHistory.create.mock.calls[0][0].email).toBe('kept@example.com');
+  });
+
   test('a renewal never re-subscribes a learner who replied STOP (or changes reminder preferences)', async () => {
     const pendingOrder = makeClaimedOrder({ status: 'created' });
     PendingOrder.findOneAndUpdate.mockResolvedValue(makeClaimedOrder({ status: 'processing' }));

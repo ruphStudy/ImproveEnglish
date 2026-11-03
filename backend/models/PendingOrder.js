@@ -25,7 +25,7 @@ const pendingOrderSchema = new mongoose.Schema({
   },
   email: {
     type: String,
-    required: true
+    required: false // web checkout requires it (controller); WhatsApp UPGRADE links for learners without email have none
   },
   level: {
     type: String,

@@ -15,7 +15,8 @@ jest.mock('../services/voiceEvaluationService', () => ({
 jest.mock('../services/promoService', () => ({
   validatePromoCode: jest.fn()
 }));
-jest.mock('razorpay', () => jest.fn().mockImplementation(() => ({})));
+const mockPaymentLinkCreate = jest.fn();
+jest.mock('razorpay', () => jest.fn().mockImplementation(() => ({ paymentLink: { create: mockPaymentLinkCreate } })));
 jest.mock('../services/retentionService', () => ({ recordLearnerEvent: jest.fn().mockResolvedValue(null), recordDayActiveMilestones: jest.fn().mockResolvedValue() }));
 jest.mock('../utils/whatsappDedupe', () => ({
   isDuplicateMessage: jest.fn().mockResolvedValue(false)
@@ -266,5 +267,25 @@ describe('messaging preferences: STOP / RESUME and STOP REMINDERS / START REMIND
     expect(user.streak).toBe(3);
     // the streak milestone is a direct reply to DONE, so it is allowed past the opt-out guard
     expect(sendTemplate).toHaveBeenCalledWith(user.phone, 'streak_reminder', [user.name, '3'], 'en_US', { allowOptedOut: true });
+  });
+});
+
+describe('WhatsApp upgrade payment link for a learner without email', () => {
+  test('no empty email is sent to Razorpay or stored on the pending order', async () => {
+    jest.clearAllMocks();
+    const PlanMaster = require('../models/PlanMaster');
+    const PendingOrder = require('../models/PendingOrder');
+    mockPaymentLinkCreate.mockResolvedValue({ id: 'plink_1', short_url: 'https://rzp.io/i/x' });
+    const user = { ...existingUser, isActive: true, level: 'beginner', email: undefined, save: jest.fn() };
+    User.findOne.mockResolvedValue(user);
+    PlanMaster.findOne.mockResolvedValue({ level: 'bigenner', days: 30, price: 499 });
+    PendingOrder.create.mockResolvedValue({});
+
+    await webhookController.handleWebhook(webhookReqWithMessage({ id: 'wamid.plan30', from: user.phone, text: { body: '30' } }), mockRes(), jest.fn());
+
+    const link = mockPaymentLinkCreate.mock.calls[0][0];
+    expect(link.customer).toEqual({ name: user.name, contact: user.phone });
+    expect('email' in link.notes).toBe(false);
+    expect(PendingOrder.create.mock.calls[0][0].email).toBeUndefined();
   });
 });

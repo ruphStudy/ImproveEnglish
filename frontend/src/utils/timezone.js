@@ -30,6 +30,35 @@ const COUNTRY_ZONES = {
   NZ: ['Pacific/Auckland', 'Pacific/Chatham']
 };
 
+// Every IANA zone (incl. legacy names some browsers report) of the selected
+// multi-zone countries - used to check that a detected zone really is in that
+// country. +1 numbers can't tell Canada from the US, so the country SELECTION decides.
+const COUNTRY_ALL_ZONES = {
+  CA: ['America/St_Johns', 'America/Halifax', 'America/Glace_Bay', 'America/Moncton', 'America/Goose_Bay', 'America/Toronto',
+    'America/Montreal', 'America/Nipigon', 'America/Thunder_Bay', 'America/Iqaluit', 'America/Pangnirtung', 'America/Atikokan',
+    'America/Coral_Harbour', 'America/Winnipeg', 'America/Rainy_River', 'America/Resolute', 'America/Rankin_Inlet', 'America/Regina',
+    'America/Swift_Current', 'America/Edmonton', 'America/Cambridge_Bay', 'America/Yellowknife', 'America/Inuvik', 'America/Creston',
+    'America/Dawson_Creek', 'America/Fort_Nelson', 'America/Whitehorse', 'America/Dawson', 'America/Vancouver', 'America/Blanc-Sablon'],
+  US: ['America/New_York', 'America/Detroit', 'America/Kentucky/Louisville', 'America/Louisville', 'America/Kentucky/Monticello',
+    'America/Indiana/Indianapolis', 'America/Indianapolis', 'America/Indiana/Vincennes', 'America/Indiana/Winamac', 'America/Indiana/Marengo',
+    'America/Indiana/Petersburg', 'America/Indiana/Vevay', 'America/Chicago', 'America/Indiana/Tell_City', 'America/Indiana/Knox',
+    'America/Menominee', 'America/North_Dakota/Center', 'America/North_Dakota/New_Salem', 'America/North_Dakota/Beulah', 'America/Denver',
+    'America/Boise', 'America/Phoenix', 'America/Los_Angeles', 'America/Anchorage', 'America/Juneau', 'America/Sitka',
+    'America/Metlakatla', 'America/Yakutat', 'America/Nome', 'America/Adak', 'Pacific/Honolulu'],
+  AU: ['Australia/Sydney', 'Australia/Melbourne', 'Australia/Brisbane', 'Australia/Lindeman', 'Australia/Adelaide', 'Australia/Broken_Hill',
+    'Australia/Perth', 'Australia/Eucla', 'Australia/Darwin', 'Australia/Hobart', 'Australia/Currie', 'Australia/Lord_Howe', 'Antarctica/Macquarie'],
+  NZ: ['Pacific/Auckland', 'Pacific/Chatham']
+};
+
+/** Is `timezone` a zone of `country`? null when the country is unknown/"Other" (anything goes). */
+export function timezoneMatchesCountry(timezone, country) {
+  const tz = normalizeTimezone(timezone);
+  if (!tz) return false;
+  if (SINGLE_ZONE_COUNTRIES[country]) return tz === SINGLE_ZONE_COUNTRIES[country];
+  if (COUNTRY_ALL_ZONES[country]) return COUNTRY_ALL_ZONES[country].includes(tz);
+  return null;
+}
+
 const SHAPE = /^(?:UTC|[A-Za-z]+(?:\/[A-Za-z0-9_+-]+){1,2})$/;
 
 /** Canonical IANA name, or null when not a valid time zone. */
@@ -55,18 +84,30 @@ export function detectBrowserTimezone(intl = globalThis.Intl) {
 }
 
 /**
- * Final time zone for registration: the learner's choice, else the detected
- * zone, else the country's zone when unambiguous. Otherwise needsChoice -
- * the phone country alone never decides a multi-zone country.
+ * Final time zone for registration, following the selected phone country:
+ * - the learner's own choice wins (kept until the country changes - see keepChosenTimezone);
+ * - single-zone country: that zone;
+ * - multi-zone country (CA, US, AU, NZ): the browser zone if it is in that country,
+ *   otherwise the learner must choose (never "all of Canada is Toronto");
+ * - "Other": the browser zone, otherwise the learner must choose.
+ * `mismatch` is true when a browser zone was detected but is not in the selected country.
  */
 export function resolveTimezone({ chosen, detected, country }) {
   const picked = normalizeTimezone(chosen);
-  if (picked) return { timezone: picked, source: 'chosen', needsChoice: false };
+  if (picked) return { timezone: picked, source: 'chosen', needsChoice: false, mismatch: false };
   const found = normalizeTimezone(detected);
-  if (found) return { timezone: found, source: 'detected', needsChoice: false };
-  const fallback = SINGLE_ZONE_COUNTRIES[country];
-  if (fallback) return { timezone: fallback, source: 'country', needsChoice: false };
-  return { timezone: null, source: null, needsChoice: true };
+  const single = SINGLE_ZONE_COUNTRIES[country];
+  if (single) return { timezone: single, source: 'country', needsChoice: false, mismatch: !!found && found !== single };
+  const matches = found ? timezoneMatchesCountry(found, country) : false;
+  if (found && matches !== false) return { timezone: found, source: 'detected', needsChoice: false, mismatch: false };
+  return { timezone: null, source: null, needsChoice: true, mismatch: !!found };
+}
+
+/** On a country change: keep the learner's manual choice only if it fits the new country. */
+export function keepChosenTimezone(chosen, newCountry) {
+  if (!chosen) return '';
+  if (SINGLE_ZONE_COUNTRIES[newCountry]) return '';
+  return timezoneMatchesCountry(chosen, newCountry) === false ? '' : chosen;
 }
 
 /** Picker options: the country's zones first, then every zone the browser knows. */

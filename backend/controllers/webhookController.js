@@ -672,7 +672,7 @@ exports.handleWebhook = async (req, res, next) => {
             customer: {
               name: user.name,
               contact: phone,
-              email: user.email || ''
+              ...(user.email ? { email: user.email } : {}) // optional for Razorpay; never send an empty address
             },
             notify: {
               sms: false,
@@ -686,7 +686,7 @@ exports.handleWebhook = async (req, res, next) => {
               userId: user._id.toString(),
               name: user.name,
               phone: phone,
-              email: user.email,
+              ...(user.email ? { email: user.email } : {}),
               level: selectedLevel,
               planDuration: planDuration.toString()
             }
@@ -699,7 +699,7 @@ exports.handleWebhook = async (req, res, next) => {
             paymentLinkId: paymentLinkResponse.id, // Payment link ID for matching
             name: user.name,
             phone: phone,
-            email: user.email || '',
+            email: user.email || undefined,
             level: selectedLevel,
             planDuration: planDuration,
             amountPaise: finalAmountPaise,

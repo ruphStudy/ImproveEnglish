@@ -3,12 +3,13 @@ import { useSearchParams, useNavigate } from 'react-router-dom';
 import { createOrder, getOrderStatus, getPlans, getPaymentConfig, validatePromo, activateFree } from '../api';
 import Footer from '../components/Footer';
 import { checkPhone } from '../utils/phone';
-import { detectBrowserTimezone, resolveTimezone, timezoneOptions, timezoneCity, lessonTimeLabel } from '../utils/timezone';
+import { detectBrowserTimezone, resolveTimezone, keepChosenTimezone, timezoneOptions, timezoneCity, lessonTimeLabel } from '../utils/timezone';
 import {
   isPlanEligible,
   checkoutMode,
   promoResetAction,
   buildFreeActivationPayload,
+  checkEmail,
   friendlyPromoError,
   runExclusive,
   nextLessonDelivery,
@@ -221,6 +222,8 @@ export default function BuyPlan() {
       clearPromoQuote('Your details changed. Please apply the promo code again.');
     }
     if (['phone', 'country'].includes(name)) setPhoneError('');
+    // A manual time-zone choice survives a country change only if it is in the new country.
+    if (name === 'country') setChosenTimezone(prev => keepChosenTimezone(prev, value));
     
     if (name === 'level') {
       // When level changes, check if current duration is available
@@ -272,8 +275,11 @@ export default function BuyPlan() {
       setError('Please correct your WhatsApp number');
       return false;
     }
-    if (!formData.email.trim() || !formData.email.includes('@')) {
-      setError('Please enter a valid email address');
+    // Email is optional for free activation, required for paid checkout (receipts /
+    // payment records). A supplied address is always checked.
+    const emailCheck = checkEmail(formData.email, { required: !isFreeCheckout });
+    if (emailCheck) {
+      setError(emailCheck);
       return false;
     }
     if (!tz.timezone) {
@@ -567,7 +573,7 @@ export default function BuyPlan() {
                   {tz.timezone ? (
                     <p className="flex flex-wrap items-center gap-x-2">
                       <span aria-hidden="true">🕖</span>
-                      <span>Your daily lesson: <strong>{lessonTimeLabel(tz.timezone, nextLessonDelivery(), localScheduling)}</strong></span>
+                      <span>Your lesson arrives at <strong>{lessonTimeLabel(tz.timezone, nextLessonDelivery(), localScheduling)}</strong></span>
                       <button
                         type="button"
                         onClick={() => setShowTimezonePicker(v => !v)}
@@ -579,7 +585,14 @@ export default function BuyPlan() {
                       </button>
                     </p>
                   ) : (
-                    <p className="text-amber-700">We could not detect your time zone. Please choose it below.</p>
+                    <p className="text-amber-700">
+                      {tz.mismatch
+                        ? `Your device is set to ${timezoneCity(detectedTimezone)} time, which is not in ${selectedCountry.name}. Please choose your ${selectedCountry.name} time zone below.`
+                        : 'We could not detect your time zone. Please choose it below.'}
+                    </p>
+                  )}
+                  {tz.timezone && tz.mismatch && !showTimezonePicker && (
+                    <p className="text-xs text-gray-500 mt-1">Set from your country ({selectedCountry.name}). Living elsewhere? Use Change.</p>
                   )}
                   {(showTimezonePicker || tz.needsChoice) && (
                     <select
@@ -651,7 +664,7 @@ export default function BuyPlan() {
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Email Address *
+                    Email Address {isFreeCheckout ? <span className="text-gray-500 font-normal">(optional)</span> : '*'}
                   </label>
                   <input
                     type="email"
@@ -660,7 +673,7 @@ export default function BuyPlan() {
                     onChange={handleChange}
                     placeholder="your@email.com"
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    required
+                    required={!isFreeCheckout}
                   />
                 </div>
 

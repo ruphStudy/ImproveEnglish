@@ -22,8 +22,19 @@ export function promoResetAction(field) {
 
 /** Body for POST /api/payments/activate-free - deliberately carries no amount. */
 export function buildFreeActivationPayload(formData, promo, timezone) {
-  const { name, phone, country, email, level, planDuration } = formData;
-  return { name, phone, country, email, level, planDuration, promoCode: promo.code, timezone };
+  const { name, phone, country, level, planDuration } = formData;
+  const email = String(formData.email || '').trim();
+  // Email is optional for free activation: omitted when blank, never a placeholder.
+  return { name, phone, country, ...(email ? { email } : {}), level, planDuration, promoCode: promo.code, timezone };
+}
+
+const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** Error message for the email field, or '' when acceptable. Mirrors the backend check. */
+export function checkEmail(value, { required }) {
+  const email = String(value || '').trim();
+  if (!email) return required ? 'Please enter your email address' : '';
+  return email.length <= 254 && EMAIL_SHAPE.test(email) ? '' : 'Please enter a valid email address';
 }
 
 const FRIENDLY_ERRORS = [

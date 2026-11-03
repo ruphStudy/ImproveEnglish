@@ -396,6 +396,38 @@ describeDb('free beta activation (real MongoDB)', () => {
       expect((await FreeActivation.findOne({ phone: stored })).timezone).toBe(expected);
     });
 
+    test('free activation without email works; nothing fake is stored', async () => {
+      await seedPromo();
+      const res = await post('/api/payments/activate-free', { name: 'No Mail', phone: '9876501201', country: 'IN', level: 'beginner', planDuration: 30, promoCode: 'BETA100', timezone: 'Asia/Kolkata' });
+      expect(res.status).toBe(200);
+      const user = await User.findOne({ phone: '919876501201' }).lean();
+      expect(user).toMatchObject({ state: 'READY', timezone: 'Asia/Kolkata' });
+      expect(user.email).toBeUndefined();
+      expect((await FreeActivation.findOne({ phone: '919876501201' }).lean()).email).toBeUndefined();
+    });
+
+    test('free activation with an email stores it; an invalid email is rejected before anything is reserved', async () => {
+      await seedPromo();
+      const ok = await activateWith({ phone: '9876501202', country: 'IN', email: ' asha@example.com ' });
+      expect(ok.status).toBe(200);
+      expect((await User.findOne({ phone: '919876501202' })).email).toBe('asha@example.com');
+
+      const bad = await activateWith({ phone: '9876501203', country: 'IN', email: 'not-an-email' });
+      expect(bad.status).toBe(400);
+      expect(bad.body.message).toBe('Please enter a valid email address');
+      expect(await User.exists({ phone: '919876501203' })).toBeNull();
+      expect(await FreeActivation.exists({ phone: '919876501203' })).toBeNull();
+    });
+
+    test('paid checkout still requires a valid email (checked before any Razorpay call)', async () => {
+      const base = { name: 'Paid', phone: '9876501204', country: 'IN', level: 'beginner', planDuration: 30 };
+      const missing = await post('/api/payments/create-order', base);
+      expect(missing.status).toBe(400);
+      const invalid = await post('/api/payments/create-order', { ...base, email: 'nope' });
+      expect(invalid.status).toBe(400);
+      expect((await invalid.json()).message).toBe('Please enter a valid email address');
+    });
+
     test('missing browser detection: single-zone country falls back, multi-zone country stays unset (treated as IST)', async () => {
       await seedPromo();
       await activateWith({ phone: '9876501102', country: 'IN' });

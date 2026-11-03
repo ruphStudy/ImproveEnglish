@@ -16,7 +16,7 @@ const paymentHistorySchema = new mongoose.Schema({
   },
   email: {
     type: String,
-    required: true
+    required: false // free learners may register without email and later upgrade via WhatsApp
   },
   level: {
     type: String,

@@ -8,6 +8,7 @@ const PlanMaster = require('../models/PlanMaster');
 const { processSuccessfulPayment, reconcileStuckPendingOrders } = require('../services/paymentProcessingService');
 const { normalizePhone } = require('../utils/phone');
 const { resolveRegistrationTimezone } = require('../utils/timezone');
+const { checkEmail } = require('../utils/email');
 
 // Initialize Razorpay
 const razorpay = new Razorpay({
@@ -37,12 +38,14 @@ exports.getPublicConfig = (req, res) => {
 exports.activateFree = async (req, res) => {
   try {
     const { name, phone, country, email, level, planDuration, promoCode, timezone } = req.body || {};
-    if (!name || !phone || !email || !level || !planDuration || !promoCode) {
+    if (!name || !phone || !level || !planDuration || !promoCode) {
       return res.status(400).json({
         success: false,
-        message: 'Missing required fields: name, phone, email, level, planDuration, promoCode'
+        message: 'Missing required fields: name, phone, level, planDuration, promoCode'
       });
     }
+    const emailCheck = checkEmail(email, { required: false }); // optional for free activation
+    if (emailCheck.error) return res.status(400).json({ success: false, message: emailCheck.error });
     const normalizedPhone = normalizePhone(phone, country);
     if (!normalizedPhone) {
       return res.status(400).json({ success: false, message: 'Please enter a valid WhatsApp number for the selected country' });
@@ -53,7 +56,7 @@ exports.activateFree = async (req, res) => {
     const { activateFreePromo, publicWelcomeStatus } = require('../services/freePromoService');
     const result = await activateFreePromo({
       name: String(name).trim(),
-      email: String(email).trim(),
+      email: emailCheck.email,
       phone: normalizedPhone,
       level,
       planDuration,
@@ -92,6 +95,9 @@ exports.createOrder = async (req, res) => {
         message: 'Missing required fields: name, phone, email, level, planDuration'
       });
     }
+    // Web checkout keeps email required (payment records, Razorpay prefill / receipts).
+    const emailCheck = checkEmail(email, { required: true });
+    if (emailCheck.error) return res.status(400).json({ success: false, message: emailCheck.error });
 
     // Validate level
     if (!['beginner', 'intermediate', 'advanced'].includes(level)) {

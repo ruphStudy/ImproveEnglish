@@ -8,9 +8,11 @@ import {
   resolveTimezone,
   timezoneOptions,
   lessonTimeLabel,
-  nextLocalSevenAm
+  nextLocalSevenAm,
+  keepChosenTimezone,
+  timezoneMatchesCountry
 } from './timezone.js';
-import { buildFreeActivationPayload, nextLessonDelivery, formatLessonDelivery } from './freePromo.js';
+import { buildFreeActivationPayload, nextLessonDelivery, formatLessonDelivery, checkEmail } from './freePromo.js';
 
 const fakeIntl = (timeZone) => ({ DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone }) }) });
 
@@ -32,21 +34,48 @@ test('only valid IANA zones are accepted', () => {
   for (const bad of ['Mars/Phobos', 'Toronto', '+05:30', '', null, 7]) assert.equal(normalizeTimezone(bad), null);
 });
 
-test('detected zone is used even when it differs from the phone country (+1 and travellers)', () => {
-  assert.deepEqual(resolveTimezone({ detected: 'America/Vancouver', country: 'CA' }), { timezone: 'America/Vancouver', source: 'detected', needsChoice: false });
-  assert.equal(resolveTimezone({ detected: 'Europe/London', country: 'IN' }).timezone, 'Europe/London');
+test('the selected country decides: browser zone kept only when it is in that country', () => {
+  assert.deepEqual(resolveTimezone({ detected: 'America/Vancouver', country: 'CA' }), { timezone: 'America/Vancouver', source: 'detected', needsChoice: false, mismatch: false });
+  // India is single-zone: always Asia/Kolkata, mismatch flagged for a device elsewhere
+  assert.deepEqual(resolveTimezone({ detected: 'Europe/London', country: 'IN' }), { timezone: 'Asia/Kolkata', source: 'country', needsChoice: false, mismatch: true });
+  assert.deepEqual(resolveTimezone({ detected: 'Asia/Calcutta', country: 'IN' }), { timezone: 'Asia/Kolkata', source: 'country', needsChoice: false, mismatch: false });
+  // "Other": whatever the browser says
+  assert.equal(resolveTimezone({ detected: 'Europe/Berlin', country: '' }).timezone, 'Europe/Berlin');
+});
+
+test('shared +1: Canada and USA are decided by the selected country, never the dialing code', () => {
+  assert.equal(resolveTimezone({ detected: 'America/Chicago', country: 'US' }).timezone, 'America/Chicago');
+  assert.equal(resolveTimezone({ detected: 'America/Edmonton', country: 'CA' }).timezone, 'America/Edmonton');
+  // US device, Canada selected (or vice versa): ask - never default Canada to Toronto
+  assert.deepEqual(resolveTimezone({ detected: 'America/New_York', country: 'CA' }), { timezone: null, source: null, needsChoice: true, mismatch: true });
+  assert.deepEqual(resolveTimezone({ detected: 'America/Toronto', country: 'US' }), { timezone: null, source: null, needsChoice: true, mismatch: true });
+  // legacy / alias names some browsers report still match
+  assert.equal(resolveTimezone({ detected: 'America/Montreal', country: 'CA' }).timezone, 'America/Toronto');
+  assert.equal(resolveTimezone({ detected: 'America/Indianapolis', country: 'US' }).timezone, 'America/Indianapolis');
+  assert.equal(timezoneMatchesCountry('Pacific/Honolulu', 'US'), true);
+  assert.equal(timezoneMatchesCountry('Europe/London', 'GB'), true);
+  assert.equal(timezoneMatchesCountry('Europe/London', ''), null);
+});
+
+test('manual choice is kept while the country stays, and only kept on change if it fits the new country', () => {
+  assert.equal(keepChosenTimezone('America/Vancouver', 'CA'), 'America/Vancouver');
+  assert.equal(keepChosenTimezone('America/Vancouver', 'US'), '');
+  assert.equal(keepChosenTimezone('America/Chicago', 'IN'), '');
+  assert.equal(keepChosenTimezone('Europe/Berlin', ''), 'Europe/Berlin');
+  assert.equal(keepChosenTimezone('', 'CA'), '');
 });
 
 test('optional correction overrides detection; an invalid choice is ignored', () => {
   assert.equal(resolveTimezone({ chosen: 'America/Toronto', detected: 'America/Vancouver', country: 'CA' }).timezone, 'America/Toronto');
+  assert.equal(resolveTimezone({ chosen: 'America/Halifax', detected: 'America/New_York', country: 'CA' }).timezone, 'America/Halifax');
   assert.equal(resolveTimezone({ chosen: 'Not/AZone', detected: 'Europe/London', country: 'GB' }).timezone, 'Europe/London');
 });
 
 test('without detection: single-zone countries fall back, multi-zone countries must choose', () => {
-  assert.deepEqual(resolveTimezone({ detected: null, country: 'IN' }), { timezone: 'Asia/Kolkata', source: 'country', needsChoice: false });
+  assert.deepEqual(resolveTimezone({ detected: null, country: 'IN' }), { timezone: 'Asia/Kolkata', source: 'country', needsChoice: false, mismatch: false });
   assert.equal(resolveTimezone({ detected: null, country: 'GB' }).timezone, 'Europe/London');
   for (const country of ['CA', 'US', 'AU', '']) {
-    assert.deepEqual(resolveTimezone({ detected: null, country }), { timezone: null, source: null, needsChoice: true });
+    assert.deepEqual(resolveTimezone({ detected: null, country }), { timezone: null, source: null, needsChoice: true, mismatch: false });
   }
 });
 
@@ -110,4 +139,17 @@ test('registration page reads the flag from the backend, not a hardcoded constan
   assert.ok(src.includes('setLocalScheduling(!!res.data.localLessonScheduling)'));
   assert.ok(src.includes('useState(false); // backend INTERNATIONAL_SCHEDULING_ENABLED'));
   assert.ok(!src.includes('tomorrow at 7:00 AM'));
+});
+
+test('email: optional for free activation, required for paid, validated whenever supplied', () => {
+  assert.equal(checkEmail('', { required: false }), '');
+  assert.equal(checkEmail('   ', { required: false }), '');
+  assert.equal(checkEmail('', { required: true }), 'Please enter your email address');
+  assert.equal(checkEmail('asha@example.com', { required: false }), '');
+  for (const bad of ['asha', 'asha@', 'asha@example', 'a b@x.com']) {
+    assert.equal(checkEmail(bad, { required: false }), 'Please enter a valid email address');
+  }
+  const form = { name: 'A', phone: '9876543210', country: 'IN', level: 'beginner', planDuration: 30 };
+  assert.equal('email' in buildFreeActivationPayload({ ...form, email: '  ' }, { code: 'BETA100' }, 'Asia/Kolkata'), false);
+  assert.equal(buildFreeActivationPayload({ ...form, email: ' a@x.com ' }, { code: 'BETA100' }, 'Asia/Kolkata').email, 'a@x.com');
 });
